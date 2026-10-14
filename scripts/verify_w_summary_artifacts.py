@@ -19,7 +19,7 @@ PROJECT_ROOT=Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0,str(PROJECT_ROOT))
 
-from eval.metrics import evaluate_all
+from utils.metrics import evaluate_all
 from models.oc_ivae import OC_iVAE
 from scripts.run_w_summary_ablation import seed_training, state_digest
 

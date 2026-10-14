@@ -28,7 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from data.dataset import NCMAPSSDataset
 from data.sampler import UnitStratifiedSampler
 from models.oc_ivae import OC_iVAE
-from scripts.run_eval import run_evaluation, _resolve_main_h5_path
+from evaluate import run_evaluation, _resolve_main_h5_path
 from scripts.verify_w_summary import verify_switch
 from train.trainer import Trainer
 
@@ -186,7 +186,7 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
                                   evaluation='runs/exp_tuning_mono_weight/evaluation_unsupervisedhi_v1_20261014_verified'),
                   training_budget=configs['true']['training'],
                   source_revision=original_revision,source_hashes={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in [
-                      Path('models/tcn.py'),Path('models/oc_ivae.py'),Path('models/vae.py'),Path('models/__init__.py'),Path('train/trainer.py'),Path('scripts/run_w_summary_ablation.py'),Path('loss/total.py'),Path('data/dataset.py'),Path('data/sampler.py')]},
+                      Path('models/tcn.py'),Path('models/oc_ivae.py'),Path('models/vae.py'),Path('models/__init__.py'),Path('train/trainer.py'),Path('scripts/run_w_summary_ablation.py'),Path('loss/total.py'),Path('data/dataset.py'),Path('data/sampler.py'),Path('evaluate.py'),Path('utils/metrics.py')]},
                   random_rules=dict(python_numpy_torch_seed=42,sampler='default_rng(42 + epoch_counter)',
                                     deterministic_algorithms=True,cudnn_benchmark=False,num_workers=0,
                                     cpu_threads=torch.get_num_threads(),batch_sequence='recorded actual unit/cycle keys',

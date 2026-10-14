@@ -8,9 +8,8 @@ import pytest
 import torch
 from sklearn.feature_selection import mutual_info_regression
 
-from eval.inference import extract_hi
-from eval.metrics import evaluate_all, monotonicity, trendability
-from eval.protocol import associate, read_reference, read_rul, scale_dev_test
+from evaluate import associate, predict_cycles, read_reference, read_rul, scale_dev_test
+from utils.metrics import evaluate_all, monotonicity, trendability
 from models.oc_ivae import OC_iVAE
 
 
@@ -89,27 +88,26 @@ def test_dev_only_scaling_without_smoothing_or_per_unit_scaling():
     np.testing.assert_array_equal(t.hi,[3,-3])
 
 
-def test_key_join_not_position_and_window_mean():
-    pred = {1:dict(cycle_ids=[2,1],hi_raw=[.2,.8])}
+def test_key_join_not_position():
+    pred = pd.DataFrame(dict(unit=[1,1],cycle=[2,1],score=[.2,.8]))
     rul = pd.DataFrame(dict(unit=[1,1],cycle=[1,2],rul=[9,0]))
     ref = pd.DataFrame(dict(unit=[1,1],cycle=[2,1],hi_gt=[0,1]))
     f = associate(pred,rul,ref)
     np.testing.assert_array_equal(f.hi_gt,[1,0])
     np.testing.assert_array_equal(f.rul,[9,0])
     raw = np.array([.23456789, .81234567], dtype=np.float32)
-    precise = associate({1:dict(cycle_ids=[2,1],hi_raw=raw)},rul,ref)
+    precise = associate(pd.DataFrame(dict(unit=[1,1],cycle=[2,1],score=raw)),rul,ref)
     assert precise.score.dtype == np.float64
     np.testing.assert_array_equal(precise.score,raw[::-1].astype(np.float64))
-    pred = {1:dict(cycle_ids=[1,1,2],hi_raw=[1,.6,.2])}
+    pred = pd.DataFrame(dict(unit=[1,1,1],cycle=[1,1,2],score=[1,.6,.2]))
     with pytest.raises(ValueError,match='duplicate'):
         associate(pred,rul,ref)
-    np.testing.assert_allclose(associate(pred,rul,ref,True).score,[.8,.2])
     with pytest.raises(ValueError,match='missing or extra'):
-        associate({1:dict(cycle_ids=[1],hi_raw=[1])},rul,ref)
+        associate(pd.DataFrame(dict(unit=[1],cycle=[1],score=[1])),rul,ref)
     with pytest.raises(ValueError,match='duplicate'):
-        associate({1:dict(cycle_ids=[1,2],hi_raw=[1,0])},rul,pd.concat([ref,ref]))
+        associate(pd.DataFrame(dict(unit=[1,1],cycle=[1,2],score=[1,0])),rul,pd.concat([ref,ref]))
     with pytest.raises(ValueError,match='nonfinite'):
-        associate({1:dict(cycle_ids=[1,2],hi_raw=[1,np.inf])},rul,ref)
+        associate(pd.DataFrame(dict(unit=[1,1],cycle=[1,2],score=[1,np.inf])),rul,ref)
 
 
 def test_original_rul_constant_within_flight(tmp_path: Path):
@@ -155,15 +153,15 @@ def test_raw_score_is_posterior_mean_and_no_sigmoid():
         def __len__(self): return 2
         def __getitem__(self,i):
             return x[i],mask[i],u[i],w[i],torch.tensor(1),torch.tensor(i+1),torch.tensor(float('nan'))
-    extracted=extract_hi(model,Flights())
-    np.testing.assert_array_equal(extracted[1]['hi_raw'],first['hi_raw'].numpy())
+    extracted=predict_cycles(model,Flights())
+    np.testing.assert_array_equal(extracted.score,first['hi_raw'].numpy())
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
 def test_unified_entrypoint_old_checkpoint_and_artifacts(tmp_path: Path, monkeypatch, wrapped):
     import json
     import yaml
-    import scripts.run_eval as entry
+    import evaluate as entry
     from data.dataset import NCMAPSSDataset
     config = tmp_path/'config.yaml'
     config.write_text(yaml.safe_dump(dict(data=dict(h5_path='mock.h5',val_split=.2),model={})))
@@ -180,7 +178,7 @@ def test_unified_entrypoint_old_checkpoint_and_artifacts(tmp_path: Path, monkeyp
     monkeypatch.setattr(entry,'_resolve_main_h5_path',lambda _: 'mock.h5')
     monkeypatch.setattr(entry,'_resolve_cycle_hi_path',lambda *args: None)
     monkeypatch.setattr(entry,'build_model',lambda *args: torch.nn.Linear(1,1))
-    monkeypatch.setattr(entry,'extract_hi',lambda m,ds,device: {1:dict(cycle_ids=[1,2,3,4],hi_raw=[4,3,2,1] if ds.split=='train' else [5,3,1,0])})
+    monkeypatch.setattr(entry,'predict_cycles',lambda m,ds,device: pd.DataFrame(dict(unit=[1]*4,cycle=[1,2,3,4],score=[4,3,2,1] if ds.split=='train' else [5,3,1,0])))
     monkeypatch.setattr(entry,'read_rul',lambda *args: pd.DataFrame(dict(unit=[1]*4,cycle=[1,2,3,4],rul=[4,3,2,1])))
     monkeypatch.setattr(entry,'_plot_curves',lambda f,p: p.write_text('plot placeholder'))
     out=entry.run_evaluation(str(config),str(checkpoint),str(tmp_path/'evaluation'),'cpu')

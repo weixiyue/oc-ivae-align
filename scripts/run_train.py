@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from data.dataset import NCMAPSSDataset
 from data.sampler import UnitStratifiedSampler
-from scripts.run_eval import run_evaluation
+from evaluate import run_evaluation
 from models import build_model
 from models.tcn import W_SUMMARY_DIM
 from train.trainer import Trainer
