@@ -89,6 +89,10 @@ def run_evaluation(config_path: str, checkpoint_path: str | None = None,
                                   train_stats=dev_dataset.get_train_stats(), L_max=dev_dataset.L_max)
     model = _build_model(raw, flat)
     checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
+    saved_switch = checkpoint.get('decoder_use_W_summary', True)
+    configured_switch = flat.get('decoder_use_W_summary', True)
+    if saved_switch != configured_switch:
+        raise ValueError('checkpoint decoder_use_W_summary does not match evaluation config')
     model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
     frames, reference_meta = {}, {}
     for split, dataset in [('dev', dev_dataset), ('test', test_dataset)]:
@@ -107,6 +111,8 @@ def run_evaluation(config_path: str, checkpoint_path: str | None = None,
     destination.mkdir(parents=True, exist_ok=False)
     source_hash = hashlib.sha256(checkpoint_file.read_bytes()).hexdigest()
     metadata = dict(protocol_version=PROTOCOL_VERSION,
+                    decoder_use_W_summary=configured_switch,
+                    training_run_metadata=checkpoint.get('run_metadata', {}),
                     reference_repository='https://github.com/KBaja/UnsupervisedHI',
                     reference_commit=REFERENCE_COMMIT,
                     reference_metric_file='CMAPSS/eval_utils.py',

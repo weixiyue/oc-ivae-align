@@ -39,6 +39,9 @@ class Trainer:
             device: Device string passed to ``torch.device``.
         """
         self.config = _flatten_config(config)
+        self.model_config = dict(config.get("model", {}))
+        self.model_config["decoder_use_W_summary"] = model.decoder.use_W_summary
+        self.run_metadata = dict(config.get("run_metadata", {}))
         self.device = torch.device(device)
         self.model = model.to(self.device)
         self.train_loader = train_loader
@@ -93,12 +96,23 @@ class Trainer:
                 self.epoch,
                 self.config,
             )
+            if not torch.isfinite(total_loss) or any(
+                not torch.isfinite(torch.as_tensor(value)).all()
+                for value in loss_dict.values()
+            ):
+                raise FloatingPointError(f"nonfinite training loss at epoch {self.epoch}")
             total_loss.backward()
+            if any(p.grad is not None and not torch.isfinite(p.grad).all()
+                   for p in self.model.parameters()):
+                raise FloatingPointError(f"nonfinite gradient at epoch {self.epoch}")
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 max_norm=self.gradient_clip_norm,
+                error_if_nonfinite=True,
             )
             self.optimizer.step()
+            if any(not torch.isfinite(p).all() for p in self.model.parameters()):
+                raise FloatingPointError(f"nonfinite parameter at epoch {self.epoch}")
 
             _accumulate_losses(loss_sums, loss_dict)
             n_batches += 1
@@ -125,6 +139,8 @@ class Trainer:
 
                 out = self.model(x, mask, u, W_seq)
                 recon = masked_recon_loss(out["x_hat"], x, mask)
+                if not torch.isfinite(recon):
+                    raise FloatingPointError(f"nonfinite validation loss at epoch {self.epoch}")
                 recon_sum += float(recon.item())
                 n_batches += 1
 
@@ -179,6 +195,9 @@ class Trainer:
         torch.save(
             {
                 "model_state_dict": self.model.state_dict(),
+                "model_config": self.model_config,
+                "decoder_use_W_summary": self.model.decoder.use_W_summary,
+                "run_metadata": self.run_metadata,
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "epoch": self.epoch,
                 "best_val_recon": self.best_val_recon,
@@ -191,6 +210,9 @@ class Trainer:
         # weights_only=False is required because the checkpoint dict contains
         # optimizer state (not pure model weights); suppress the FutureWarning explicitly.
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        saved_switch = checkpoint.get("decoder_use_W_summary", True)
+        if saved_switch != self.model.decoder.use_W_summary:
+            raise ValueError("checkpoint decoder_use_W_summary does not match model")
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.epoch = int(checkpoint["epoch"])

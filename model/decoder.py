@@ -88,7 +88,8 @@ class TCNDecoder(nn.Module):
 
         Args:
             config: Model config with ``c_hidden``, ``n_decoder_layers``,
-                ``d_zd``, ``d_zc``, and ``w_summary_dim``.
+                ``d_zd``, ``d_zc``, ``w_summary_dim``, and
+                ``decoder_use_W_summary`` (defaults to True for old configs).
         """
         super().__init__()
         c_hidden = int(config.get("c_hidden", C_HIDDEN))
@@ -104,6 +105,9 @@ class TCNDecoder(nn.Module):
         self.d_zd = d_zd
         self.d_zc = d_zc
         self.w_summary_dim = w_summary_dim
+        self.use_W_summary = config.get("decoder_use_W_summary", True)
+        if not isinstance(self.use_W_summary, bool):
+            raise ValueError("decoder_use_W_summary must be a boolean")
         self.input_projection = nn.Linear(d_zd + d_zc + w_summary_dim, c_hidden)
         self.layers = nn.ModuleList(
             [
@@ -137,6 +141,9 @@ class TCNDecoder(nn.Module):
         if w_summary.shape[-1] != self.w_summary_dim:
             raise ValueError("computed W summary does not match w_summary_dim")
 
+        if not self.use_W_summary:
+            # Keep identical projection shape/initialization; only remove its W input.
+            w_summary = torch.zeros_like(w_summary)
         z = torch.cat((z_d, z_c, w_summary), dim=-1)
         h = self.input_projection(z)
         h = h.unsqueeze(1).expand(-1, W_seq.shape[1], -1)

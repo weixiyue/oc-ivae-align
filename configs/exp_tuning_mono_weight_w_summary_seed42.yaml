@@ -1,0 +1,53 @@
+# OC-iVAE Default Configuration — N-CMAPSS DS03
+# Based on OC_iVAE_model_design.md §8
+
+data:
+  h5_path: "data/raw/N-CMAPSS_DS03-012.h5"
+  downsample_factor: 10
+  sensor_threshold: 1.0e-3     # drop sensors with std < this
+  n_fc: 3                      # number of flight condition classes
+  val_split: 0.2               # fraction of units for validation
+
+model:
+  c_hidden: 64
+  n_backbone_layers: 6         # dilation = [1, 2, 4, 8, 16, 32]
+  n_decoder_layers: 4          # dilation = [1, 2, 4, 8]
+  d_zd: 2
+  d_zc: 8
+  u_dim: 11
+  decoder_use_W_summary: true  # same 18 input columns; false zeroes only 8 W-summary columns
+
+training:
+  k_units_per_batch: 7
+  m_cycles_per_unit: 12
+  optimizer: "adamw"
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  total_epochs: 100
+  gradient_clip_norm: 1.0
+  use_early_stopping: true   # set to true to enable early stopping
+  early_stopping_patience: 30
+  warmup_end_epoch: 5         # phase 1: recon only until this epoch
+  transition_end_epoch: 15     # phase 2: +KL +HSIC until this epoch
+
+loss_weights:
+  beta_d: 0.5
+  beta_c: 1.0
+  lambda_hsic: 1.0
+  lambda_mono: 10.0
+  lambda_spearman: 2.0
+  ranking_margin: 0.01
+  ranking_delta_t: 3
+  spearman_tau: 0.1
+
+postprocess:
+  ewma_alpha: 0.3
+
+logging:
+  log_dir: "runs/"
+  checkpoint_dir: "checkpoints/"
+  log_every_n_epochs: 1
+
+experiment:
+  seed: 42
+  paired_w_summary_ablation: true
