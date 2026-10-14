@@ -162,7 +162,7 @@ def test_unified_entrypoint_old_checkpoint_and_artifacts(tmp_path: Path, monkeyp
     import json
     import yaml
     import evaluate as entry
-    from data.dataset import NCMAPSSDataset
+    from dataset import NCMAPSSDataset
     config = tmp_path/'config.yaml'
     config.write_text(yaml.safe_dump(dict(data=dict(h5_path='mock.h5',val_split=.2),model={})))
     checkpoint = tmp_path/'old.pt'
@@ -187,8 +187,8 @@ def test_unified_entrypoint_old_checkpoint_and_artifacts(tmp_path: Path, monkeyp
     assert saved['metadata']['scaling']['n_samples_seen_'] == 4
     assert saved['metadata']['mi_random_state'] == 42
     assert saved['metadata']['evaluated_splits'] == ['dev','test']
-    assert set(p.name for p in out.iterdir()) == {'metrics.json','scaler.json','evaluation_config.yaml','predictions.csv','hi_curves_dev.png','hi_curves_test.png'}
-    pred=pd.read_csv(out/'predictions.csv')
+    assert set(p.name for p in out.iterdir()) == {'metrics.json','scaler.json','evaluation_config.yaml','scores.csv','hi_curves_dev.png','hi_curves_test.png'}
+    pred=pd.read_csv(out/'scores.csv')
     assert pred.columns.tolist() == ['split','unit','cycle','score','hi','hi_gt','rul']
     assert pred[pred.split=='test'].hi.min() < 0 and pred[pred.split=='test'].hi.max() > 1
     np.testing.assert_allclose(pred[pred.split=='dev'].hi, [1,2/3,1/3,0], rtol=0, atol=1e-15)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -17,8 +18,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from data.dataset import NCMAPSSDataset
-from data.sampler import UnitStratifiedSampler
+from dataset import NCMAPSSDataset, UnitStratifiedSampler
 from evaluate import run_evaluation
 from models import build_model
 from models.oc_ivae import OC_iVAE
@@ -33,7 +33,8 @@ def train_model(
     config: dict[str, Any],
     device: str = 'cpu',
     *,
-    audit_dir: Path | None = None,
+    run_dir: Path,
+    audit: bool = False,
 ) -> dict[str, Any]:
     """Train, validate and select the strict minimum reconstruction checkpoint.
 
@@ -43,13 +44,35 @@ def train_model(
         val_loader: Validation batches, excluded from parameter updates.
         config: Nested experiment configuration or flat training/loss settings.
         device: Training device.
-        audit_dir: Paired-experiment directory; requires a recorded batch sampler.
+        run_dir: New directory for the configuration, checkpoint and history.
+        audit: Record paired-experiment RNG/batch details; requires a recorded sampler.
     Returns:
         Completed epochs, best reconstruction loss, checkpoint path and history.
     """
     settings = _training_config(config)
-    config = dict(config)
-    config['run_metadata'] = dict(config.get('run_metadata', {}))
+    run_dir.mkdir(parents=True, exist_ok=False)
+    config = copy.deepcopy(config)
+    config.pop('checkpoint_dir', None)
+    config.pop('log_dir', None)
+    config['run_dir'] = str(run_dir.resolve())
+    model_config = config.setdefault('model', {})
+    model_config.setdefault('in_features', model.backbone.input_conv.conv.in_channels)
+    model_config.setdefault('w_summary_dim', model.decoder.w_summary_dim)
+    model_config['decoder_use_W_summary'] = model.decoder.use_W_summary
+    logging = config.setdefault('logging', {})
+    logging['log_dir'] = str(run_dir.resolve())
+    logging['checkpoint_dir'] = str(run_dir.resolve())
+    metadata = config.setdefault('run_metadata', {})
+    metadata.setdefault('seed', None)
+    metadata['configured_seed'] = config.get('experiment', {}).get('seed')
+    metadata['initial_state_sha256'] = state_digest(model.state_dict())
+    metadata['rng_at_training_start'] = rng_digest()
+    metadata['device'] = str(torch.device(device))
+    metadata['torch_num_threads'] = torch.get_num_threads()
+    metadata['deterministic_algorithms'] = torch.are_deterministic_algorithms_enabled()
+    (run_dir / 'config.yaml').write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding='utf-8',
+    )
     torch_device = torch.device(device)
     model.to(torch_device)
     optimizer = torch.optim.AdamW(
@@ -58,9 +81,7 @@ def train_model(
     )
     total_epochs = int(settings['total_epochs'])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs)
-    checkpoint_dir = Path(str(settings['checkpoint_dir']))
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / 'best_model.pt'
+    checkpoint_path = run_dir / 'best.pt'
     best_val_recon = float('inf')
     epochs_without_improvement = 0
     completed_epochs = 0
@@ -69,14 +90,14 @@ def train_model(
     patience = int(settings.get('early_stopping_patience', 30))
 
     for epoch in range(total_epochs):
-        rng_before = rng_digest() if audit_dir is not None else None
+        rng_before = rng_digest() if audit else None
         train_losses = train_epoch(model, train_loader, optimizer, epoch, settings, torch_device)
-        rng_after = rng_digest() if audit_dir is not None else None
+        rng_after = rng_digest() if audit else None
         completed_epochs = epoch + 1
         val_recon = validate(model, val_loader, completed_epochs, torch_device)
         row = dict(epoch=completed_epochs, **train_losses, val_recon=val_recon,
                    lr=optimizer.param_groups[0]['lr'])
-        if audit_dir is not None:
+        if audit:
             row.update(
                 best_val_before_epoch=best_val_recon if np.isfinite(best_val_recon) else None,
                 selected_by_val_recon=val_recon < best_val_recon,
@@ -85,19 +106,19 @@ def train_model(
                 batch_sha256=hashlib.sha256(
                     json.dumps(train_loader.batch_sampler.last_batches).encode()).hexdigest(),
             )
-            with (audit_dir / 'training_metrics.csv').open('a', newline='') as file:
-                writer = csv.DictWriter(file, fieldnames=list(row))
-                if not history:
-                    writer.writeheader()
-                writer.writerow(row)
             print(json.dumps(row), flush=True)
+        with (run_dir / 'history.csv').open('a', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=list(row))
+            if not history:
+                writer.writeheader()
+            writer.writerow(row)
         history.append(row)
         scheduler.step()
 
         if val_recon < best_val_recon:
             best_val_recon = val_recon
             epochs_without_improvement = 0
-            if audit_dir is not None:
+            if audit:
                 config['run_metadata'].update(
                     epochs_recorded=completed_epochs, rng_at_checkpoint=rng_digest(),
                 )
@@ -273,6 +294,22 @@ def rng_digest() -> str:
     return hashlib.sha256(pickle.dumps(states)).hexdigest()
 
 
+def state_digest(state: dict[str, torch.Tensor]) -> str:
+    """Hash named tensor values to record initialization independently of serialization.
+
+    Args:
+        state: Model state dictionary.
+    Returns:
+        SHA256 of sorted tensor names, shapes, dtypes and bytes.
+    """
+    digest = hashlib.sha256()
+    for key, value in sorted(state.items()):
+        digest.update(key.encode())
+        digest.update(str((tuple(value.shape), value.dtype)).encode())
+        digest.update(value.detach().cpu().contiguous().numpy().tobytes())
+    return digest.hexdigest()
+
+
 def _training_config(config: dict[str, Any]) -> dict[str, Any]:
     """Preserve training/loss/logging merge order and scalar top-level overrides."""
     flat: dict[str, Any] = {}
@@ -287,7 +324,8 @@ def _training_config(config: dict[str, Any]) -> dict[str, Any]:
 def main() -> None:
     """Load an experiment, train its model, evaluate the best checkpoint and log it."""
     parser = argparse.ArgumentParser(description='Train OC-iVAE or a VAE baseline on N-CMAPSS.')
-    parser.add_argument('--config', default='configs/ds03_default.yaml')
+    parser.add_argument('--config', default='config/ds03_default.yaml')
+    parser.add_argument('--run-dir', type=Path, help='New run directory; existing paths are rejected')
     args = parser.parse_args()
     config_path = Path(args.config)
     with config_path.open(encoding='utf-8') as file:
@@ -298,20 +336,22 @@ def main() -> None:
         if not isinstance(config.get(section), dict):
             raise ValueError(f'config must include section {section!r}')
     exp_name = config_path.stem
-    config['checkpoint_dir'] = str(Path('checkpoints') / exp_name)
-    config['log_dir'] = str(Path('runs') / exp_name)
-    Path(config['checkpoint_dir']).mkdir(parents=True, exist_ok=True)
-    Path(config['log_dir']).mkdir(parents=True, exist_ok=True)
+    run_dir = args.run_dir or Path('runs') / exp_name
+    if run_dir.exists():
+        raise FileExistsError(f'run directory already exists: {run_dir}')
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device: {device}')
     print(f'Experiment: {exp_name}')
-    print(f"Checkpoint dir: {config['checkpoint_dir']}")
-    print(f"Log dir: {config['log_dir']}")
+    print(f'Run directory: {run_dir}')
     data_config = config['data']
     training_config = config['training']
     model_config = dict(config['model'])
     h5_path = _resolve_main_h5_path(data_config)
     cycle_hi_path = _resolve_cycle_hi_path(data_config, h5_path)
+    data_config['h5_path'] = str(h5_path.absolute())
+    data_config['cycle_hi_path'] = None if cycle_hi_path is None else str(cycle_hi_path.absolute())
+    if data_config.get('test_cycle_hi_path') is not None:
+        data_config['test_cycle_hi_path'] = str(Path(data_config['test_cycle_hi_path']).absolute())
     cycle_hi_arg = None if cycle_hi_path is None else str(cycle_hi_path)
     train_dataset = NCMAPSSDataset(
         str(h5_path), cycle_hi_arg, data_config, split='train',
@@ -329,8 +369,14 @@ def main() -> None:
     train_loader = DataLoader(train_dataset, batch_sampler=sampler)
     val_loader = DataLoader(val_dataset, batch_size=k * m, shuffle=False)
     model = build_model(config, model_config)
-    result = train_model(model, train_loader, val_loader, config, device)
-    evaluation_dir = run_evaluation(str(config_path), result['best_checkpoint'], device=device)
+    config['model'] = model_config
+    config['run_metadata'] = dict(
+        source_config=str(config_path.resolve()), split_seed=42, sampler_seed=42,
+    )
+    result = train_model(model, train_loader, val_loader, config, device, run_dir=run_dir)
+    evaluation_dir = run_evaluation(
+        str(run_dir / 'config.yaml'), result['best_checkpoint'], str(run_dir), device,
+    )
     with Path(__file__).with_name('EXPERIMENT_LOG.md').open('a', encoding='utf-8') as file:
         file.write(
             f'\n## {datetime.now():%Y-%m-%d %H:%M:%S} | training-run | {config_path}\n'

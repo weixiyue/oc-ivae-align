@@ -19,7 +19,7 @@ import yaml
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader
 
-from data.dataset import NCMAPSSDataset
+from dataset import NCMAPSSDataset
 from models import build_model
 from models.oc_ivae import OC_iVAE
 from models.tcn import W_SUMMARY_DIM
@@ -40,13 +40,11 @@ def run_evaluation(
     Args:
         config_path: Original experiment YAML, including original train/val fraction.
         checkpoint_path: Old model-state checkpoint or bare state dictionary.
-        output_dir: New directory; existing directories are rejected.
+        output_dir: New directory, or the matching training run awaiting its first evaluation.
         device: Optional inference device; otherwise select available CUDA or CPU.
     Returns:
-        New evaluation directory with predictions, metrics, scaler and provenance.
+        Evaluation directory with scores, metrics, scaler and provenance.
     """
-    if output_dir is not None and Path(output_dir).exists():
-        raise FileExistsError(f'evaluation directory already exists: {output_dir}')
     with open(config_path, encoding='utf-8') as file:
         raw = yaml.safe_load(file)
     if not isinstance(raw, dict):
@@ -61,10 +59,22 @@ def run_evaluation(
     }
     flat.setdefault('w_summary_dim', W_SUMMARY_DIM)
     exp_name = Path(config_path).stem
-    checkpoint_path = checkpoint_path or f'checkpoints/{exp_name}/best_model.pt'
+    run_dir = Path(raw.get('run_dir', Path('runs') / exp_name))
+    checkpoint_path = checkpoint_path or str(run_dir / 'best.pt')
     checkpoint_file = Path(checkpoint_path)
     if not checkpoint_file.is_file():
         raise FileNotFoundError(checkpoint_path)
+    existing_run = output_dir is not None and Path(output_dir).exists()
+    if existing_run:
+        destination = Path(output_dir)
+        # Only a matching fresh training run may receive its first evaluation.
+        artifacts = ['scores.csv', 'metrics.json', 'scaler.json', 'evaluation_config.yaml',
+                     'hi_curves_dev.png', 'hi_curves_test.png']
+        if (Path(config_path).resolve() != (destination / 'config.yaml').resolve()
+                or checkpoint_file.resolve() != (destination / 'best.pt').resolve()
+                or not (destination / 'history.csv').is_file()
+                or any((destination / name).exists() for name in artifacts)):
+            raise FileExistsError(f'evaluation directory already exists: {output_dir}')
     h5_path = _resolve_main_h5_path(data_config)
     device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
     # No held-out dev units during evaluation; labels are associated separately.
@@ -104,7 +114,7 @@ def run_evaluation(
         Path(output_dir) if output_dir
         else Path('runs') / exp_name / f'evaluation_{PROTOCOL_VERSION}_{timestamp}'
     )
-    destination.mkdir(parents=True, exist_ok=False)
+    destination.mkdir(parents=True, exist_ok=existing_run)
     source_hash = hashlib.sha256(checkpoint_file.read_bytes()).hexdigest()
     metadata = dict(
         protocol_version=PROTOCOL_VERSION,
@@ -150,7 +160,7 @@ def run_evaluation(
     )
     predictions = pd.concat([dev, test], ignore_index=True)
     predictions[['split', 'unit', 'cycle', 'score', 'hi', 'hi_gt', 'rul']].to_csv(
-        destination / 'predictions.csv', index=False,
+        destination / 'scores.csv', index=False,
     )
     for name, content in [('metrics.json', dict(metadata=metadata, **metrics)), ('scaler.json', scaler)]:
         (destination / name).write_text(

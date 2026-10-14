@@ -1,4 +1,4 @@
-"""Preprocessing utilities for flat N-CMAPSS DS03 h5 files."""
+"""Preprocessing utilities for flat N-CMAPSS h5 files."""
 
 import numpy as np
 import torch
@@ -7,7 +7,6 @@ _A_UNIT_COL = 0
 _A_CYCLE_COL = 1
 _A_FC_COL = 2
 _A_HS_COL = 3
-_HEALTHY_STATE = 1
 _STD_EPS = 1e-8
 _DEAD_SENSOR_STD = 1e-3
 
@@ -87,7 +86,6 @@ def group_by_unit_cycle(
     if A.shape[1] <= _A_HS_COL:
         raise ValueError("A must include unit, cycle, Fc, and hs columns")
 
-    # hs filtering removed: full lifecycle data needed for HI curve (1→0)
     if A.shape[0] == 0:
         return {}
 
@@ -174,7 +172,7 @@ def compute_unit_stats(
     """
     unit_arrays = [
         np.asarray(cycle_data["X_s"])
-        for _, cycle_data in _iter_cycles_by_unit(cycles, unit_id)
+        for (unit, _), cycle_data in cycles.items() if unit == unit_id
     ]
     if not unit_arrays:
         raise ValueError(f"unit_id {unit_id} was not found in cycles")
@@ -343,18 +341,6 @@ def _validate_aligned_rows(*arrays: np.ndarray) -> None:
             row_count = array.shape[0]
         elif array.shape[0] != row_count:
             raise ValueError("A, W, and X_s must have the same number of rows")
-
-
-def _iter_cycles_by_unit(
-    cycles: dict[tuple[int, int], dict],
-    unit_id: int,
-) -> list[tuple[tuple[int, int], dict]]:
-    """Return cycles whose key unit id matches ``unit_id``."""
-    return [
-        (key, cycle_data)
-        for key, cycle_data in cycles.items()
-        if key[_A_UNIT_COL] == unit_id
-    ]
 
 
 def _validate_cycle_arrays(X_s: np.ndarray, W: np.ndarray) -> None:

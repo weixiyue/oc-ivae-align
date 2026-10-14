@@ -1,15 +1,18 @@
-"""Dataset wrapper for N-CMAPSS DS03 cycle samples."""
+"""Dataset and unit-stratified sampler for N-CMAPSS cycle samples."""
 
 from __future__ import annotations
 
 import math
+from collections import defaultdict
+from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
-from data.preprocess import (
+from utils.preprocess import (
     compute_Lmax,
     compute_W_stats,
     compute_unit_stats,
@@ -19,32 +22,22 @@ from data.preprocess import (
     process_cycle,
 )
 
-_MAIN_H5_SPLIT = "dev"
-_TRAIN_SPLIT = "train"
-_VAL_SPLIT = "val"
-_TEST_SPLIT = "test"
-_HI_DF_KEY = "df"
-_UNIT_COLUMN = "unit"
-_HI_COLUMN = "HI"
-_W_MEAN_GLOBAL_KEY = "W_mean_global"
-_W_STD_GLOBAL_KEY = "W_std_global"
-
 
 class NCMAPSSDataset(Dataset):
-    """PyTorch dataset for processed N-CMAPSS DS03 cycle samples."""
+    """PyTorch dataset for processed N-CMAPSS cycle samples."""
 
     def __init__(
         self,
         h5_path: str,
         cycle_hi_path: str | None = None,
-        config: dict = {},
-        split: str = _TRAIN_SPLIT,
+        config: dict | None = None,
+        split: str = "train",
         val_fraction: float = 0.2,
         random_seed: int = 42,
         train_stats: dict | None = None,
         L_max: int | None = None,
     ) -> None:
-        """Load raw DS03 data, split units, and cache preprocessing metadata.
+        """Load raw N-CMAPSS data, split units, and cache preprocessing metadata.
 
         Args:
             h5_path: Path to the main flat-row N-CMAPSS h5 file.
@@ -57,15 +50,20 @@ class NCMAPSSDataset(Dataset):
             train_stats: Optional normalization stats exported from train data.
             L_max: Optional shared sequence length from train data.
         """
-        self.split = _validate_split(split)
-        self.val_fraction = _validate_val_fraction(val_fraction)
+        if split not in {"train", "val", "test"}:
+            raise ValueError("split must be 'train', 'val', or 'test'")
+        if val_fraction < 0.0 or val_fraction > 1.0:
+            raise ValueError("val_fraction must be between 0 and 1")
+        config = {} if config is None else config
+        self.split = split
+        self.val_fraction = val_fraction
         self.config = dict(config)
         self.downsample_factor = _get_config_int(config, "downsample_factor")
         self.n_fc = _get_config_int(config, "n_fc")
         self.config["downsample_factor"] = self.downsample_factor
         self.config["n_fc"] = self.n_fc
 
-        h5_split = _TEST_SPLIT if self.split == _TEST_SPLIT else _MAIN_H5_SPLIT
+        h5_split = "test" if self.split == "test" else "dev"
         raw_arrays = load_h5(h5_path, split=h5_split)
         self.cycles = group_by_unit_cycle(
             raw_arrays["A"],
@@ -80,11 +78,11 @@ class NCMAPSSDataset(Dataset):
             self.hi_lookup = {}
         else:
             self.has_hi = True
-            cycle_hi_df = pd.read_hdf(cycle_hi_path, key=_HI_DF_KEY)
+            cycle_hi_df = pd.read_hdf(cycle_hi_path, key="df")
             self.hi_lookup = self._build_hi_lookup(cycle_hi_df)
 
         unit_ids = sorted({unit_id for unit_id, _ in self.cycles})
-        if self.split == _TEST_SPLIT:
+        if self.split == "test":
             self.samples = sorted(self.cycles)
         else:
             split_units = self._split_units(unit_ids, self.val_fraction, random_seed)
@@ -104,12 +102,12 @@ class NCMAPSSDataset(Dataset):
                 for unit_id in unit_ids
             }
         else:
-            self.W_mean_global = np.asarray(train_stats[_W_MEAN_GLOBAL_KEY])
-            self.W_std_global = np.asarray(train_stats[_W_STD_GLOBAL_KEY])
+            self.W_mean_global = np.asarray(train_stats["W_mean_global"])
+            self.W_std_global = np.asarray(train_stats["W_std_global"])
             self.unit_stats = {
                 int(unit_id): stats
                 for unit_id, stats in train_stats.items()
-                if unit_id not in {_W_MEAN_GLOBAL_KEY, _W_STD_GLOBAL_KEY}
+                if unit_id not in {"W_mean_global", "W_std_global"}
             }
 
     def __len__(self) -> int:
@@ -118,12 +116,9 @@ class NCMAPSSDataset(Dataset):
 
     def get_train_stats(self) -> dict:
         """Export normalization stats for use with test set."""
-        stats = {
-            uid: self.unit_stats[uid]
-            for uid in self.unit_stats
-        }
-        stats[_W_MEAN_GLOBAL_KEY] = self.W_mean_global
-        stats[_W_STD_GLOBAL_KEY] = self.W_std_global
+        stats = dict(self.unit_stats)
+        stats["W_mean_global"] = self.W_mean_global
+        stats["W_std_global"] = self.W_std_global
         return stats
 
     def __getitem__(
@@ -163,7 +158,7 @@ class NCMAPSSDataset(Dataset):
             W_std_global=self.W_std_global,
         )
 
-        if self.has_hi and (unit_id, cycle_id) in self.hi_lookup:
+        if self.has_hi:
             hi = torch.tensor(
                 self.hi_lookup[(unit_id, cycle_id)],
                 dtype=torch.float32,
@@ -186,7 +181,7 @@ class NCMAPSSDataset(Dataset):
         """Build ``(unit_id, cycle_id) -> HI`` using row order within each unit."""
         missing_columns = {
             column
-            for column in (_UNIT_COLUMN, _HI_COLUMN)
+            for column in ("unit", "HI")
             if column not in cycle_hi_df.columns
         }
         if missing_columns:
@@ -196,10 +191,10 @@ class NCMAPSSDataset(Dataset):
         hi_lookup: dict[tuple[int, int], float] = {}
         cycle_counts: dict[int, int] = {}
         for _, row in cycle_hi_df.iterrows():
-            unit_id = int(row[_UNIT_COLUMN])
+            unit_id = int(row["unit"])
             cycle_id = cycle_counts.get(unit_id, 0) + 1
             cycle_counts[unit_id] = cycle_id
-            hi_lookup[(unit_id, cycle_id)] = float(row[_HI_COLUMN])
+            hi_lookup[(unit_id, cycle_id)] = float(row["HI"])
 
         return hi_lookup
 
@@ -218,8 +213,8 @@ class NCMAPSSDataset(Dataset):
         val_units = set(shuffled_units[-n_val:].tolist()) if n_val else set()
         train_units = set(shuffled_units.tolist()) - val_units
         return {
-            _TRAIN_SPLIT: train_units,
-            _VAL_SPLIT: val_units,
+            "train": train_units,
+            "val": val_units,
         }
 
     def _validate_hi_lookup(self) -> None:
@@ -232,20 +227,6 @@ class NCMAPSSDataset(Dataset):
                 )
 
 
-def _validate_split(split: str) -> str:
-    """Validate and return a dataset split name."""
-    if split not in {_TRAIN_SPLIT, _VAL_SPLIT, _TEST_SPLIT}:
-        raise ValueError("split must be 'train', 'val', or 'test'")
-    return split
-
-
-def _validate_val_fraction(val_fraction: float) -> float:
-    """Validate and return the validation fraction."""
-    if val_fraction < 0.0 or val_fraction > 1.0:
-        raise ValueError("val_fraction must be between 0 and 1")
-    return val_fraction
-
-
 def _get_config_int(config: dict, key: str) -> int:
     """Read an integer dataset config value."""
     if key not in config:
@@ -256,3 +237,71 @@ def _get_config_int(config: dict, key: str) -> int:
         raise ValueError(f"config[{key!r}] must be an integer")
 
     return int(value)
+
+
+class UnitStratifiedSampler(Sampler[list[int]]):
+    """Yield batches containing ``k`` units and ``m`` cycles per unit."""
+
+    def __init__(
+        self,
+        dataset: Any,
+        k: int = 8,
+        m: int = 12,
+        random_seed: int = 42,
+    ) -> None:
+        """Build a unit-to-index map from ``dataset.samples``.
+
+        Args:
+            dataset: Dataset exposing ``samples`` as ``(unit_id, cycle_id)`` pairs.
+            k: Number of units per batch.
+            m: Number of cycles sampled per unit in each batch.
+            random_seed: Base seed for deterministic per-epoch shuffling.
+        """
+        if k < 1:
+            raise ValueError("k must be at least 1")
+        if m < 1:
+            raise ValueError("m must be at least 1")
+        if not hasattr(dataset, "samples"):
+            raise ValueError("dataset must expose a samples attribute")
+
+        self.k = k
+        self.m = m
+        self.random_seed = random_seed
+        self.epoch_counter = 0
+
+        unit_to_indices: dict[int, list[int]] = defaultdict(list)
+        for index, sample in enumerate(dataset.samples):
+            unit_id, _ = sample
+            unit_to_indices[int(unit_id)].append(index)
+
+        self.unit_to_indices = dict(unit_to_indices)
+        self.unit_ids = sorted(self.unit_to_indices)
+
+    def __iter__(self) -> Iterator[list[int]]:
+        """Yield one epoch of flat index batches."""
+        rng = np.random.default_rng(self.random_seed + self.epoch_counter)
+        self.epoch_counter += 1
+
+        shuffled_units = np.asarray(self.unit_ids, dtype=np.int64)
+        rng.shuffle(shuffled_units)
+        if len(shuffled_units) == 0:
+            return
+
+        effective_k = min(self.k, len(shuffled_units))
+        stop = len(shuffled_units) - effective_k + 1
+        for start in range(0, stop, effective_k):
+            batch_units = shuffled_units[start : start + effective_k]
+            batch_indices: list[int] = []
+            for unit_id in batch_units:
+                indices = self.unit_to_indices[int(unit_id)]
+                replace = len(indices) < self.m
+                sampled = rng.choice(indices, size=self.m, replace=replace)
+                batch_indices.extend(int(index) for index in sampled.tolist())
+
+            yield batch_indices
+
+    def __len__(self) -> int:
+        """Return the number of K-unit batches per epoch."""
+        if 0 < len(self.unit_ids) < self.k:
+            return 1
+        return len(self.unit_ids) // self.k

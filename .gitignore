@@ -4,6 +4,7 @@ __pycache__/
 .env
 *.h5
 data/raw/
+data/processed/
 runs/
 checkpoints/
 *.log

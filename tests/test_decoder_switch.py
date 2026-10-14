@@ -8,12 +8,12 @@ from torch.utils.data import DataLoader
 
 from models.oc_ivae import OC_iVAE
 from models.tcn import TCNDecoder
-from scripts.verify_w_summary import verify_switch
+from experiments.verify_w_summary import verify_switch
 from train import save_checkpoint, train_epoch
 
 
 def test_switch_smoke_with_legacy_checkpoint(tmp_path: Path):
-    raw=yaml.safe_load(Path('configs/exp_tuning_mono_weight.yaml').read_text())
+    raw=yaml.safe_load(Path('config/exp_tuning_mono_weight.yaml').read_text())
     model=OC_iVAE(dict(raw['model'],in_features=14))
     # Synthetic learned nonzero zd prior head, preserving the production zero init.
     with torch.no_grad():
@@ -45,7 +45,7 @@ def test_boolean_switch_and_equal_shapes():
 
 def test_nonfinite_training_stops_before_optimizer_step(tmp_path: Path):
     torch.set_num_threads(2)
-    raw=yaml.safe_load(Path('configs/exp_tuning_mono_weight.yaml').read_text())
+    raw=yaml.safe_load(Path('config/exp_tuning_mono_weight.yaml').read_text())
     class NonfiniteModel(OC_iVAE):
         def forward(self,*args,**kwargs):
             out=super().forward(*args,**kwargs)
@@ -65,7 +65,7 @@ def test_nonfinite_training_stops_before_optimizer_step(tmp_path: Path):
 
 def test_existing_experiment_directory_is_untouched(tmp_path: Path, monkeypatch):
     import sys
-    from scripts.run_w_summary_ablation import main
+    from experiments.run_w_summary_ablation import main
     root=tmp_path/'existing'; root.mkdir()
     marker=root/'existing_result.txt'; marker.write_text('keep')
     monkeypatch.setattr(sys,'argv',['run_w_summary_ablation.py','--output-dir',str(root)])
@@ -77,7 +77,7 @@ def test_existing_experiment_directory_is_untouched(tmp_path: Path, monkeypatch)
 
 
 def test_nonfinite_clipping_norm_stops_before_optimizer_step(tmp_path: Path):
-    raw=yaml.safe_load(Path('configs/exp_tuning_mono_weight.yaml').read_text())
+    raw=yaml.safe_load(Path('config/exp_tuning_mono_weight.yaml').read_text())
     model=OC_iVAE(dict(raw['model'],in_features=14))
     for parameter in model.parameters():
         parameter.register_hook(lambda gradient: gradient*1e30)

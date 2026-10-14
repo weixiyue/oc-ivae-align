@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +15,10 @@ import yaml
 from sklearn.preprocessing import MinMaxScaler
 
 PROJECT_ROOT=Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0,str(PROJECT_ROOT))
 
 from utils.metrics import evaluate_all
 from models.oc_ivae import OC_iVAE
-from scripts.run_w_summary_ablation import seed_training, state_digest
+from experiments.run_w_summary_ablation import seed_training, state_digest
 
 
 def verify_artifacts(root: Path) -> dict[str, Any]:
@@ -34,12 +31,16 @@ def verify_artifacts(root: Path) -> dict[str, Any]:
     """
     manifest=json.loads((root/'manifest.json').read_text())
     paired=json.loads((root/'paired_verification.json').read_text())
+    modern = manifest.get('artifact_layout') == 'runs-v1'
+    history_name = 'history.csv' if modern else 'training_metrics.csv'
+    checkpoint_name = 'best.pt' if modern else 'checkpoints/best_model.pt'
+    scores_name = 'scores.csv' if modern else 'predictions.csv'
     initial=torch.load(root/'shared_initial_state.pt',map_location='cpu',weights_only=False)
     assert state_digest(initial['model_state_dict'])==manifest['initial_state_sha256']==paired['initial_state_sha256']
     assert initial['seed']==manifest['seed']==42
     assert json.loads((root/'started_runs.json').read_text())==['true','false']
     assert (root/'true/batch_sequences.jsonl').read_bytes()==(root/'false/batch_sequences.jsonl').read_bytes()
-    histories={role:pd.read_csv(root/role/'training_metrics.csv',float_precision='round_trip') for role in ['true','false']}
+    histories={role:pd.read_csv(root/role/history_name,float_precision='round_trip') for role in ['true','false']}
     for key in ['rng_before_training','rng_after_training','rng_after_validation','batch_sha256','lr']:
         pd.testing.assert_series_equal(histories['true'][key],histories['false'][key])
     assert len(histories['true'])==len(histories['false'])==100
@@ -54,7 +55,7 @@ def verify_artifacts(root: Path) -> dict[str, Any]:
         seed_training(42)
         model=OC_iVAE(config['model'])
         assert state_digest(model.state_dict())==manifest['initial_state_sha256']
-        path=root/role/'checkpoints/best_model.pt'
+        path=root/role/checkpoint_name
         checkpoint=torch.load(path,map_location='cpu',weights_only=False)
         assert checkpoint['decoder_use_W_summary'] is enabled
         assert checkpoint['model_config']['decoder_use_W_summary'] is enabled
@@ -71,8 +72,8 @@ def verify_artifacts(root: Path) -> dict[str, Any]:
         assert checkpoint['best_val_recon']==float(selected.val_recon)
         checkpoint_info[role]=dict(selected_epoch=checkpoint['epoch'],best_val_recon=checkpoint['best_val_recon'],
                                    sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-        evaluation=root/role/'evaluation'
-        frame=pd.read_csv(evaluation/'predictions.csv',float_precision='round_trip')
+        evaluation=root/role if modern else root/role/'evaluation'
+        frame=pd.read_csv(evaluation/scores_name,float_precision='round_trip')
         assert frame.columns.tolist()==['split','unit','cycle','score','hi','hi_gt','rul']
         assert not frame.duplicated(['split','unit','cycle']).any()
         assert np.isfinite(frame[['unit','cycle','score','hi','hi_gt','rul']]).all().all()
@@ -102,7 +103,7 @@ def verify_artifacts(root: Path) -> dict[str, Any]:
                                   scaled_frames['false'][['split','unit','cycle','hi_gt','rul']])
     source_hashes_verified=[]
     for source,expected in manifest['source_hashes'].items():
-        if source in {'model/decoder.py', 'loss/total.py'}:
+        if source in {'model/decoder.py', 'loss/total.py', 'data/dataset.py', 'data/sampler.py'}:
             # The historical experiment records the executed commit separately
             # from the pre-switch revision used by its smoke comparison.
             revision = (root/'code_commit.txt').read_text().strip()

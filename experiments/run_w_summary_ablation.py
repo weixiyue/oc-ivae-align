@@ -13,7 +13,7 @@ import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import numpy as np
 import torch
@@ -21,15 +21,12 @@ import yaml
 from torch.utils.data import DataLoader
 
 PROJECT_ROOT=Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0,str(PROJECT_ROOT))
 
-from data.dataset import NCMAPSSDataset
-from data.sampler import UnitStratifiedSampler
+from dataset import NCMAPSSDataset, UnitStratifiedSampler
 from models.oc_ivae import OC_iVAE
 from evaluate import run_evaluation, _resolve_main_h5_path
-from scripts.verify_w_summary import verify_switch
-from train import train_model
+from experiments.verify_w_summary import verify_switch
+from train import state_digest, train_model
 
 
 def seed_training(seed: int) -> None:
@@ -46,21 +43,6 @@ def seed_training(seed: int) -> None:
     torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.benchmark=False
     torch.backends.cudnn.deterministic=True
-
-
-def state_digest(state: dict[str, torch.Tensor]) -> str:
-    """Hash named tensor values to audit equal initialization independent of serialization.
-
-    Args:
-        state: Model state_dict.
-    Returns:
-        SHA256 of sorted names, shapes, dtypes and tensor bytes.
-    """
-    digest=hashlib.sha256()
-    for key,value in sorted(state.items()):
-        digest.update(key.encode()); digest.update(str((tuple(value.shape),value.dtype)).encode())
-        digest.update(value.detach().cpu().contiguous().numpy().tobytes())
-    return digest.hexdigest()
 
 
 class RecordedSampler(UnitStratifiedSampler):
@@ -81,14 +63,31 @@ class RecordedSampler(UnitStratifiedSampler):
 
 
 class Tee:
-    """Mirror stdout to an independent run log without changing training."""
-    def __init__(self, original: Any, file: Any) -> None:
-        self.original=original; self.file=file
+    """Mirror stdout after train_model creates the fresh run directory."""
+    def __init__(self, original: Any, path: Path) -> None:
+        """Store the destination; defer opening it until the first write."""
+        self.original = original
+        self.path = path
+        self.file: TextIO | None = None
+
     def write(self, text: str) -> int:
-        self.file.write(text); self.file.flush()
+        """Mirror one write, refusing to overwrite an existing log."""
+        if self.file is None:
+            self.file = self.path.open('x', encoding='utf-8')
+        self.file.write(text)
+        self.file.flush()
         return self.original.write(text)
+
     def flush(self) -> None:
-        self.file.flush(); self.original.flush()
+        """Flush the opened log and original output stream."""
+        if self.file is not None:
+            self.file.flush()
+        self.original.flush()
+
+    def close(self) -> None:
+        """Close the log if training produced any output."""
+        if self.file is not None:
+            self.file.close()
 
 
 def run_pair(output: Path, original_revision: str, device: str) -> None:
@@ -106,10 +105,10 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
     checks=verify_switch(smoke_dir,original_revision,PROJECT_ROOT/'checkpoints/exp_tuning_mono_weight/best_model.pt')
     (output/'verification.json').write_text(json.dumps(checks,indent=2))
     names={'true':'exp_tuning_mono_weight_w_summary_seed42','false':'exp_tuning_mono_weight_no_w_summary_seed42'}
-    configs={role:yaml.safe_load((PROJECT_ROOT/f'configs/{name}.yaml').read_text()) for role,name in names.items()}
+    configs={role:yaml.safe_load((PROJECT_ROOT/f'config/{name}.yaml').read_text()) for role,name in names.items()}
     off_copy=copy.deepcopy(configs['false']); off_copy['model']['decoder_use_W_summary']=True
     assert configs['true']==off_copy, 'paired configs differ beyond W-summary switch'
-    baseline=yaml.safe_load((PROJECT_ROOT/'configs/exp_tuning_mono_weight.yaml').read_text())
+    baseline=yaml.safe_load((PROJECT_ROOT/'config/exp_tuning_mono_weight.yaml').read_text())
     baseline['experiment']=dict(seed=42,paired_w_summary_ablation=True)
     assert configs['true']==baseline, 'control settings differ from specified baseline'
     data=configs['true']['data']
@@ -131,14 +130,14 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
                     torch_rng_state=training_rng,python_rng_state=random.getstate(),numpy_rng_state=np.random.get_state(),
                     cuda_rng_states=cuda_rng),output/'shared_initial_state.pt')
     historical=torch.load(PROJECT_ROOT/'checkpoints/exp_tuning_mono_weight/best_model.pt',map_location='cpu',weights_only=False)
-    manifest=dict(seed=42,device=device,torch_version=torch.__version__,numpy_version=np.__version__,
+    manifest=dict(artifact_layout='runs-v1',seed=42,device=device,torch_version=torch.__version__,numpy_version=np.__version__,
                   initial_state_sha256=initial_digest,initialization_source='shared_initial_state.pt',
                   historical=dict(role='history_only',checkpoint_keys=list(historical),epoch=historical['epoch'],
                                   reason='no initialization seed/RNG/config in checkpoint; repeated runs share checkpoint path',
                                   evaluation='runs/exp_tuning_mono_weight/evaluation_unsupervisedhi_v1_20261014_verified'),
                   training_budget=configs['true']['training'],
                   source_revision=original_revision,source_hashes={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in [
-                      Path('models/tcn.py'),Path('models/oc_ivae.py'),Path('models/vae.py'),Path('models/__init__.py'),Path('train.py'),Path('scripts/run_w_summary_ablation.py'),Path('utils/losses.py'),Path('data/dataset.py'),Path('data/sampler.py'),Path('evaluate.py'),Path('utils/metrics.py')]},
+                      Path('models/tcn.py'),Path('models/oc_ivae.py'),Path('models/vae.py'),Path('models/__init__.py'),Path('train.py'),Path('experiments/run_w_summary_ablation.py'),Path('utils/losses.py'),Path('dataset.py'),Path('utils/preprocess.py'),Path('evaluate.py'),Path('utils/metrics.py')]},
                   random_rules=dict(python_numpy_torch_seed=42,sampler='default_rng(42 + epoch_counter)',
                                     deterministic_algorithms=True,cudnn_benchmark=False,num_workers=0,
                                     cpu_threads=torch.get_num_threads(),batch_sequence='recorded actual unit/cycle keys',
@@ -147,14 +146,15 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
     (output/'manifest.json').write_text(json.dumps(manifest,indent=2))
     all_audits={}; summaries={}; started=[]
     for role in ['true','false']:
-        run_dir=output/role; run_dir.mkdir()
+        run_dir=output/role
         config=copy.deepcopy(configs[role]); config['model']['in_features']=model_cfg['in_features']
-        config['checkpoint_dir']=str(run_dir/'checkpoints'); config['log_dir']=str(run_dir)
+        config['data']['h5_path']=str(Path(h5).absolute())
+        config['data']['cycle_hi_path']=None if path is None else str(Path(path).absolute())
         config['run_metadata']=dict(seed=42,role=role,initial_state_sha256=initial_digest,
                                      shared_initial_state=str((output/'shared_initial_state.pt').resolve()),
                                      original_revision=original_revision,deterministic_algorithms=True,
                                      batch_trace=str((run_dir/'batch_sequences.jsonl').resolve()))
-        cfg_path=run_dir/'config.yaml'; cfg_path.write_text(yaml.safe_dump(config,sort_keys=False))
+        cfg_path=run_dir/'config.yaml'
         seed_training(42)
         model=OC_iVAE(config['model']); model.load_state_dict(shared_state)
         assert state_digest(model.state_dict())==initial_digest
@@ -165,20 +165,21 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
         if cuda_rng: torch.cuda.set_rng_state_all(cuda_rng)
         started.append(role)
         (output/'started_runs.json').write_text(json.dumps(started))
-        with (run_dir/'stdout.log').open('w') as log:
-            original_stdout=sys.stdout; sys.stdout=Tee(original_stdout,log)
-            try:
-                print(f'Paired {role}: seed=42, initial_state={initial_digest}',flush=True)
-                result=train_model(model,train_loader,val_loader,config,device,audit_dir=run_dir)
-            finally:
-                sys.stdout=original_stdout
+        original_stdout=sys.stdout
+        log=Tee(original_stdout,run_dir/'stdout.log')
+        sys.stdout=log
+        try:
+            result=train_model(model,train_loader,val_loader,config,device,run_dir=run_dir,audit=True)
+        finally:
+            sys.stdout=original_stdout
+            log.close()
         all_audits[role]=result['history']
         summary=dict(epochs_completed=result['epochs_completed'],best_val_recon=result['best_val_recon'],
                      best_checkpoint=str(Path(result['best_checkpoint']).resolve()),
                      initial_state_sha256=initial_digest,decoder_use_W_summary=config['model']['decoder_use_W_summary'])
         (run_dir/'training_summary.json').write_text(json.dumps(summary,indent=2))
         # Evaluation starts only after train/val selection is finished; test never informs selection.
-        eval_dir=run_evaluation(str(cfg_path),result['best_checkpoint'],str(run_dir/'evaluation'),device)
+        eval_dir=run_evaluation(str(cfg_path),result['best_checkpoint'],str(run_dir),device)
         metrics=json.loads((eval_dir/'metrics.json').read_text())
         for split in ['dev','test']:
             for key in ['mae','mape','monotonicity','trendability','fc','mi']:
@@ -214,8 +215,8 @@ def _plot_comparison(output: Path) -> None:
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    on=pd.read_csv(output/'true/evaluation/predictions.csv')
-    off=pd.read_csv(output/'false/evaluation/predictions.csv')
+    on=pd.read_csv(output/'true/scores.csv')
+    off=pd.read_csv(output/'false/scores.csv')
     joined=on.merge(off,on=['split','unit','cycle'],suffixes=('_true','_false'),validate='one_to_one')
     curve_rows=[]
     for split,group in joined.groupby('split'):

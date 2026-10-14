@@ -6,7 +6,6 @@ import ast
 import copy
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,10 +14,8 @@ import torch
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
-from data.sampler import UnitStratifiedSampler
+from dataset import UnitStratifiedSampler
 from models.tcn import TCNDecoder
 from models.oc_ivae import OC_iVAE
 from train import load_checkpoint, save_checkpoint
@@ -37,7 +34,7 @@ def verify_switch(work_dir: Path, original_revision: str, checkpoint: Path) -> d
     work_dir.mkdir(parents=True, exist_ok=False)
     torch.set_num_threads(2)
     torch.manual_seed(42)
-    raw = yaml.safe_load((PROJECT_ROOT/'configs/exp_tuning_mono_weight.yaml').read_text())
+    raw = yaml.safe_load((PROJECT_ROOT/'config/exp_tuning_mono_weight.yaml').read_text())
     cfg = dict(raw['model'], in_features=14)
     model_true = OC_iVAE(cfg).eval()
     model_false = OC_iVAE(dict(cfg, decoder_use_W_summary=False)).eval()
