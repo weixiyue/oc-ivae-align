@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0,str(PROJECT_ROOT))
 
 from eval.metrics import evaluate_all
-from model.oc_ivae import OC_iVAE
+from models.oc_ivae import OC_iVAE
 from scripts.run_w_summary_ablation import seed_training, state_digest
 
 
@@ -101,6 +102,15 @@ def verify_artifacts(root: Path) -> dict[str, Any]:
                                   scaled_frames['false'][['split','unit','cycle','hi_gt','rul']])
     source_hashes_verified=[]
     for source,expected in manifest['source_hashes'].items():
+        if source == 'model/decoder.py':
+            # The historical experiment records the executed commit separately
+            # from the pre-switch revision used by its smoke comparison.
+            revision = (root/'code_commit.txt').read_text().strip()
+            content = subprocess.check_output(
+                ['git', 'show', f'{revision}:{source}'], cwd=PROJECT_ROOT)
+            assert hashlib.sha256(content).hexdigest() == expected
+            source_hashes_verified.append(source)
+            continue
         # Retain the exact executed sources for post-run safety/type annotation updates.
         archived={'scripts/run_w_summary_ablation.py': root/'executed_run_w_summary_ablation.py',
                   'train/trainer.py': root/'executed_train_trainer.py'}

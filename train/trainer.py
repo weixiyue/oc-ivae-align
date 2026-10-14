@@ -12,7 +12,7 @@ from data.dataset import NCMAPSSDataset
 from data.sampler import UnitStratifiedSampler
 from loss.recon import masked_recon_loss
 from loss.total import compute_total_loss
-from model.oc_ivae import OC_iVAE
+from models.oc_ivae import OC_iVAE
 
 _BEST_MODEL_FILENAME = "best_model.pt"
 _DEFAULT_GRADIENT_CLIP_NORM = 1.0

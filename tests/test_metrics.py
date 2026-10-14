@@ -11,7 +11,7 @@ from sklearn.feature_selection import mutual_info_regression
 from eval.inference import extract_hi
 from eval.metrics import evaluate_all, monotonicity, trendability
 from eval.protocol import associate, read_reference, read_rul, scale_dev_test
-from model.oc_ivae import OC_iVAE
+from models.oc_ivae import OC_iVAE
 
 
 def example():
@@ -179,7 +179,7 @@ def test_unified_entrypoint_old_checkpoint_and_artifacts(tmp_path: Path, monkeyp
     monkeypatch.setattr(entry,'NCMAPSSDataset',Dataset)
     monkeypatch.setattr(entry,'_resolve_main_h5_path',lambda _: 'mock.h5')
     monkeypatch.setattr(entry,'_resolve_cycle_hi_path',lambda *args: None)
-    monkeypatch.setattr(entry,'_build_model',lambda *args: torch.nn.Linear(1,1))
+    monkeypatch.setattr(entry,'build_model',lambda *args: torch.nn.Linear(1,1))
     monkeypatch.setattr(entry,'extract_hi',lambda m,ds,device: {1:dict(cycle_ids=[1,2,3,4],hi_raw=[4,3,2,1] if ds.split=='train' else [5,3,1,0])})
     monkeypatch.setattr(entry,'read_rul',lambda *args: pd.DataFrame(dict(unit=[1]*4,cycle=[1,2,3,4],rul=[4,3,2,1])))
     monkeypatch.setattr(entry,'_plot_curves',lambda f,p: p.write_text('plot placeholder'))

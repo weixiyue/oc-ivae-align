@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from data.dataset import NCMAPSSDataset
-from model.oc_ivae import OC_iVAE
+from models.oc_ivae import OC_iVAE
 
 _INFERENCE_BATCH_SIZE = 64
 

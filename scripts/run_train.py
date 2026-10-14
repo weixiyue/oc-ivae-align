@@ -20,8 +20,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from data.dataset import NCMAPSSDataset
 from data.sampler import UnitStratifiedSampler
 from scripts.run_eval import run_evaluation
-from model.constants import W_SUMMARY_DIM
-from model.oc_ivae import OC_iVAE
+from models import build_model
+from models.tcn import W_SUMMARY_DIM
 from train.trainer import Trainer
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -31,36 +31,6 @@ _DEFAULT_CONFIG_PATH = "configs/ds03_default.yaml"
 _TRAIN_SPLIT = "train"
 _VAL_SPLIT = "val"
 _EXPERIMENT_LOG_PATH = "EXPERIMENT_LOG.md"
-
-
-def _build_model(raw_config: dict[str, Any], model_config: dict[str, Any]):
-    """Instantiate the correct model class based on experiment.baseline_type.
-
-    Returns an nn.Module whose forward() matches the OC_iVAE interface.
-    If experiment.baseline_type is absent or None, returns a plain OC_iVAE.
-
-    Args:
-        raw_config: The full nested YAML config dict (with sections).
-        model_config: The flat model config dict passed to the model constructor.
-
-    Returns:
-        An nn.Module ready for training.
-    """
-    baseline_type = raw_config.get("experiment", {}).get("baseline_type") or None
-    if baseline_type is None:
-        return OC_iVAE(model_config)
-    if baseline_type == "cvae":
-        from baselines.cvae import build_cvae_model
-
-        return build_cvae_model(model_config)
-    elif baseline_type == "vae":
-        from baselines.vae import build_vae_model
-
-        return build_vae_model(model_config)
-    raise ValueError(
-        f"Unknown baseline_type {baseline_type!r}. "
-        "Supported values: None, 'cvae', 'vae'."
-    )
 
 
 def main() -> None:
@@ -118,7 +88,7 @@ def main() -> None:
         shuffle=False,
     )
 
-    model = _build_model(config, model_config)
+    model = build_model(config, model_config)
     trainer = Trainer(
         model=model,
         train_loader=train_loader,

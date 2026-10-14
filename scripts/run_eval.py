@@ -24,37 +24,8 @@ from eval.inference import extract_hi
 from eval.metrics import evaluate_all
 from eval.protocol import (PROTOCOL_VERSION, REFERENCE_COMMIT, associate,
                            read_reference, read_rul, scale_dev_test)
-from model.constants import W_SUMMARY_DIM
-from model.oc_ivae import OC_iVAE
-
-def _build_model(raw_config: dict[str, Any], model_config: dict[str, Any]) -> torch.nn.Module:
-    """Instantiate the correct model class based on experiment.baseline_type.
-
-    Returns an nn.Module whose forward() matches the OC_iVAE interface.
-    If experiment.baseline_type is absent or None, returns a plain OC_iVAE.
-
-    Args:
-        raw_config: The full nested YAML config dict (with sections).
-        model_config: The flat model config dict passed to the model constructor.
-
-    Returns:
-        An nn.Module ready for training.
-    """
-    baseline_type = raw_config.get("experiment", {}).get("baseline_type") or None
-    if baseline_type is None:
-        return OC_iVAE(model_config)
-    if baseline_type == "cvae":
-        from baselines.cvae import build_cvae_model
-
-        return build_cvae_model(model_config)
-    elif baseline_type == "vae":
-        from baselines.vae import build_vae_model
-
-        return build_vae_model(model_config)
-    raise ValueError(
-        f"Unknown baseline_type {baseline_type!r}. "
-        "Supported values: None, 'cvae', 'vae'."
-    )
+from models import build_model
+from models.tcn import W_SUMMARY_DIM
 
 
 def run_evaluation(config_path: str, checkpoint_path: str | None = None,
@@ -87,7 +58,7 @@ def run_evaluation(config_path: str, checkpoint_path: str | None = None,
     flat['in_features'] = int(dev_dataset[0][0].shape[-1])
     test_dataset = NCMAPSSDataset(h5_path, None, flat, split='test',
                                   train_stats=dev_dataset.get_train_stats(), L_max=dev_dataset.L_max)
-    model = _build_model(raw, flat)
+    model = build_model(raw, flat)
     checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
     saved_switch = checkpoint.get('decoder_use_W_summary', True)
     configured_switch = flat.get('decoder_use_W_summary', True)

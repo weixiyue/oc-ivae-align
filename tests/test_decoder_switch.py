@@ -6,8 +6,8 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from model.oc_ivae import OC_iVAE
-from model.decoder import TCNDecoder
+from models.oc_ivae import OC_iVAE
+from models.tcn import TCNDecoder
 from scripts.verify_w_summary import verify_switch
 from train.trainer import Trainer
 

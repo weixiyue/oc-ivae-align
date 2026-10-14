@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import json
 import subprocess
@@ -18,8 +19,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from data.sampler import UnitStratifiedSampler
-from model.decoder import TCNDecoder
-from model.oc_ivae import OC_iVAE
+from models.tcn import TCNDecoder
+from models.oc_ivae import OC_iVAE
 from train.trainer import Trainer
 
 
@@ -43,9 +44,17 @@ def verify_switch(work_dir: Path, original_revision: str, checkpoint: Path) -> d
     assert model_true.state_dict().keys() == model_false.state_dict().keys()
     model_false.load_state_dict(model_true.state_dict())
     assert sum(p.numel() for p in model_true.parameters()) == sum(p.numel() for p in model_false.parameters())
-    source = subprocess.check_output(['git','show',f'{original_revision}:model/decoder.py'], cwd=PROJECT_ROOT, text=True)
-    namespace: dict[str, Any] = {'__name__':'original_decoder_smoke'}
-    exec(compile(source, '<original decoder>', 'exec'), namespace)
+    # Load the historical decoder and its dependencies from the same revision.
+    # Resolve those imports locally, without old-path compatibility shims.
+    namespace: dict[str, Any] = {'__name__': 'original_decoder_smoke'}
+    for path in ['model/constants.py', 'model/backbone.py', 'model/decoder.py']:
+        source = subprocess.check_output(
+            ['git', 'show', f'{original_revision}:{path}'], cwd=PROJECT_ROOT, text=True)
+        tree = ast.parse(source, filename=path)
+        tree.body = [node for node in tree.body
+                     if not (isinstance(node, ast.ImportFrom)
+                             and node.module in {'model.constants', 'model.backbone'})]
+        exec(compile(tree, path, 'exec'), namespace)
     old = namespace['TCNDecoder'](cfg).eval()
     old.load_state_dict(model_true.decoder.state_dict())
     x=torch.randn(3,16,14); mask=torch.ones(3,16,dtype=torch.bool); mask[0,:3]=False

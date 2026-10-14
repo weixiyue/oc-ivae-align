@@ -1,13 +1,30 @@
-"""Standard VAE baseline model builder."""
+"""cVAE and VAE baselines using the OC-iVAE architecture."""
 
 from __future__ import annotations
 
 from torch import Tensor, nn
 
-from baselines.cvae import StandardNormalPrior
-from model.backbone import TCNResBlock
-from model.branches import MaskedAvgPool, ZcBranch
-from model.oc_ivae import OC_iVAE
+from models.oc_ivae import MaskedAvgPool, OC_iVAE
+from models.tcn import TCNResBlock
+
+
+class StandardNormalPrior(nn.Module):
+    """Return fixed standard-normal parameters, ignoring auxiliary values."""
+
+    def __init__(self, d_zd: int, d_zc: int) -> None:
+        """Store latent dimensions without parameters or buffers."""
+        super().__init__()
+        self.d_zd = int(d_zd)
+        self.d_zc = int(d_zc)
+
+    def forward(self, u: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Return both latent priors with u's batch size, device and dtype."""
+        return (
+            u.new_zeros((u.shape[0], self.d_zd)),
+            u.new_zeros((u.shape[0], self.d_zd)),
+            u.new_zeros((u.shape[0], self.d_zc)),
+            u.new_zeros((u.shape[0], self.d_zc)),
+        )
 
 
 class PassthroughZcBranch(nn.Module):
@@ -50,6 +67,15 @@ class PassthroughZcBranch(nn.Module):
         return mu, log_var
 
 
+def build_cvae_model(config: dict) -> OC_iVAE:
+    """Build OC-iVAE with a fixed standard normal prior for cVAE baseline."""
+    model = OC_iVAE(config)
+    d_zd = int(config.get("d_zd", 2))
+    d_zc = int(config.get("d_zc", 8))
+    model.prior = StandardNormalPrior(d_zd=d_zd, d_zc=d_zc)
+    return model
+
+
 def build_vae_model(config: dict) -> OC_iVAE:
     """Standard VAE baseline.
 
@@ -57,11 +83,6 @@ def build_vae_model(config: dict) -> OC_iVAE:
     contribution of OC-iVAE conditioning mechanism.
     """
     model = OC_iVAE(config)
-    if not isinstance(model.zc_branch, ZcBranch):
-        raise TypeError(
-            "expected OC_iVAE.zc_branch to be a ZcBranch before replacement"
-        )
-
     c_hidden = int(config.get("c_hidden", 64))
     d_zd = int(config.get("d_zd", 2))
     d_zc = int(config.get("d_zc", 8))
