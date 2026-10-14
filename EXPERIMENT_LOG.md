@@ -198,3 +198,21 @@
 - Train monotonicity: 0.278650
 - Train trendability: 0.874381
 - Train prognosability: 0.734160
+
+## [2026-10-14] exp_tuning_mono_weight — HI protocol re-evaluation
+
+**Config**: `configs/exp_tuning_mono_weight.yaml`
+**Git tag**: N/A (evaluation only; no new tag)
+**Dataset**: DS03
+**Type**: Full Model (existing epoch-80 checkpoint; no training)
+
+| Metric | Dev | Test |
+|---|---:|---:|
+| mae | 0.060226084 | 0.050272103 |
+| mape | 20.259381420 | 25.235357429 |
+| monotonicity | 0.152312941 | 0.159958350 |
+| trendability | 0.940106608 | 0.927277841 |
+| fc | 0.854523789 | 0.904810375 |
+| mi | 0.727703291 | 0.737175284 |
+
+**Notes**: Protocol `unsupervisedhi-ncmapss-v1`, reference commit `157ebfae7baeee1e0cd52180f8e58ead3dcb448e`; all-dev scaler (663 flights), MI seed 42. Raw scores unchanged bit-for-bit. Per-unit input normalization remains unchanged. FC replaces old prognosability. Differences from previous scores reflect evaluation changes, not model improvement. Output: `runs/exp_tuning_mono_weight/evaluation_unsupervisedhi_v1_20261014_verified`. Validation/limits: `docs/EVALUATION_VERIFICATION.md`.

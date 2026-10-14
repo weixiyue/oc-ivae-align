@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 import yaml
 from torch.utils.data import DataLoader
@@ -21,8 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from data.dataset import NCMAPSSDataset
 from data.sampler import UnitStratifiedSampler
-from eval.inference import extract_hi
-from eval.metrics import evaluate_all
+from scripts.run_eval import run_evaluation
 from model.constants import W_SUMMARY_DIM
 from model.oc_ivae import OC_iVAE
 from train.trainer import Trainer
@@ -84,7 +81,6 @@ def main() -> None:
     data_config = _require_section(config, "data")
     training_config = _require_section(config, "training")
     model_config = dict(_require_section(config, "model"))
-    postprocess_config = _require_section(config, "postprocess")
     h5_path = _resolve_main_h5_path(data_config)
     cycle_hi_path = _resolve_cycle_hi_path(data_config, h5_path)
     cycle_hi_path_arg = None if cycle_hi_path is None else str(cycle_hi_path)
@@ -132,21 +128,13 @@ def main() -> None:
     )
     trainer.train()
 
-    trainer.load_checkpoint(trainer.best_checkpoint_path)
-    results = extract_hi(trainer.model, train_dataset, device=str(trainer.device))
-    metrics = evaluate_all(
-        results,
-        alpha=float(_get_required(postprocess_config, "ewma_alpha")),
-    )
-
-    _print_final_metrics(metrics)
-    metrics_path = os.path.join(config["log_dir"], "metrics_train.json")
-    _save_metrics_json(metrics, metrics_path)
-    _append_experiment_log(
-        config_path=config_path,
-        trainer=trainer,
-        metrics=metrics,
-    )
+    evaluation_dir = run_evaluation(str(config_path), trainer.best_checkpoint_path,
+                                    device=str(trainer.device))
+    with (PROJECT_ROOT / _EXPERIMENT_LOG_PATH).open('a', encoding='utf-8') as file:
+        file.write(f"\n## {datetime.now():%Y-%m-%d %H:%M:%S} | training-run | {config_path}\n"
+                   f"- Epochs completed: {trainer.epoch}\n"
+                   f"- Checkpoint: {trainer.best_checkpoint_path}\n"
+                   f"- Unified all-dev/test evaluation: {evaluation_dir}\n")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -220,54 +208,6 @@ def _resolve_cycle_hi_path(data_config: dict[str, Any], h5_path: Path) -> Path |
         "config data section must include 'cycle_hi_path' when the data "
         "directory does not contain exactly one *cycle_dev.h5 file"
     )
-
-
-def _print_final_metrics(metrics: dict[str, Any]) -> None:
-    """Print final aggregate metrics."""
-    print("Final train metrics:")
-    print(f"  monotonicity:   {metrics['monotonicity']:.6f}")
-    print(f"  trendability:   {metrics['trendability']:.6f}")
-    print(f"  prognosability: {metrics['prognosability']:.6f}")
-
-
-def _save_metrics_json(metrics: dict[str, Any], metrics_path: str) -> None:
-    """Save metrics dictionary as JSON."""
-    with open(metrics_path, "w", encoding="utf-8") as file:
-        json.dump(_to_jsonable(metrics), file, indent=2)
-
-
-def _to_jsonable(value: Any) -> Any:
-    """Convert NumPy values and arrays into JSON-serializable objects."""
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {str(key): _to_jsonable(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_to_jsonable(item) for item in value]
-    return value
-
-
-def _append_experiment_log(
-    config_path: Path,
-    trainer: Trainer,
-    metrics: dict[str, Any],
-) -> None:
-    """Append final run metrics to the experiment log."""
-    log_path = PROJECT_ROOT / _EXPERIMENT_LOG_PATH
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = (
-        f"\n## {timestamp} | training-run | {config_path}\n"
-        f"- Epochs completed: {trainer.epoch}\n"
-        f"- Best val recon: {trainer.best_val_recon:.6f}\n"
-        f"- Checkpoint: {trainer.best_checkpoint_path}\n"
-        f"- Train monotonicity: {metrics['monotonicity']:.6f}\n"
-        f"- Train trendability: {metrics['trendability']:.6f}\n"
-        f"- Train prognosability: {metrics['prognosability']:.6f}\n"
-    )
-    with log_path.open("a", encoding="utf-8") as file:
-        file.write(entry)
 
 
 if __name__ == "__main__":

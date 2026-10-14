@@ -1,4 +1,7 @@
-"""Health indicator postprocessing utilities."""
+"""Legacy per-unit/EWMA utilities, retained only for old-protocol comparisons.
+
+The main evaluation path uses eval.protocol.scale_dev_test and never calls these.
+"""
 
 import numpy as np
 
