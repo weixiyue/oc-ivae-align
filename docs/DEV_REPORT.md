@@ -1,5 +1,7 @@
 # OC-iVAE 开发审计报告
 
+> 历史审计：本文描述简化重构前的代码，保留原始结论。当前目录和行为见 README、PROJECT_STATUS 与 CODE_WALKTHROUGH；不要直接采用本文旧路径、测试状态或指标。
+
 ### 1. 项目结构总览
 
 ```text

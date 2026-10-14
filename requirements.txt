@@ -1,0 +1,10 @@
+# Verified with Python 3.11.15; CUDA wheel selection is environment-specific.
+torch==2.5.1
+numpy==2.4.6
+scipy==1.17.1
+pandas==3.0.3
+h5py==3.16.0
+PyYAML==6.0.3
+scikit-learn==1.9.1
+matplotlib==3.10.9
+tables==3.11.1

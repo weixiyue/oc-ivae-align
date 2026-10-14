@@ -1,5 +1,7 @@
 # HI evaluation protocol verification — 2026-10-14
 
+> 历史验证记录：日期、原命令和结果原样保留。当前入口为 evaluate.py，当前使用方式见 README；不将旧 tests/ 或 scripts/ 路径视为仍可执行的命令。
+
 Scope: evaluation, plotting entry points, the training-end evaluation call, and evaluation tests only. No changes to model, losses, training algorithm, datasets/input processing, or canonical configs. No training, checkpoint search, package installation, README edits, or push. Initial Git status was clean. Original source revision: `26a4b5f995350ad05fa9d8e9ec90e9132e56be34`.
 
 ## Reference and protocol

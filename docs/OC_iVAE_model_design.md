@@ -1,5 +1,7 @@
 # OC-iVAE：面向 N-CMAPSS DS03 的无监督健康指数构建模型设计
 
+> 原始设计文档：设计意图保留。当前实现、配置数值、数据语义和评估协议以源码、AGENTS.md 与 README 为准；结构重构没有据此修改模型算法。
+
 > Operating Condition-aware Identifiable VAE for Unsupervised Health Indicator Construction
 
 ---
