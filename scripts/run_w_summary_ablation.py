@@ -8,7 +8,6 @@ import csv
 import hashlib
 import json
 import os
-import pickle
 import random
 import sys
 import traceback
@@ -30,7 +29,7 @@ from data.sampler import UnitStratifiedSampler
 from models.oc_ivae import OC_iVAE
 from evaluate import run_evaluation, _resolve_main_h5_path
 from scripts.verify_w_summary import verify_switch
-from train.trainer import Trainer
+from train import train_model
 
 
 def seed_training(seed: int) -> None:
@@ -64,13 +63,6 @@ def state_digest(state: dict[str, torch.Tensor]) -> str:
     return digest.hexdigest()
 
 
-def rng_digest() -> str:
-    """Return an audit digest of Python, NumPy, CPU and available CUDA RNG states."""
-    states=(random.getstate(), np.random.get_state(), torch.get_rng_state().numpy(),
-            [s.cpu().numpy() for s in torch.cuda.get_rng_state_all()] if torch.cuda.is_available() else [])
-    return hashlib.sha256(pickle.dumps(states)).hexdigest()
-
-
 class RecordedSampler(UnitStratifiedSampler):
     """Unchanged sampler with passive recording of actual flight batch sequences."""
     def __init__(self, dataset: NCMAPSSDataset, config: dict, trace_path: Path) -> None:
@@ -86,46 +78,6 @@ class RecordedSampler(UnitStratifiedSampler):
                 output.write(json.dumps(dict(epoch_zero_based=epoch,indices=batch,
                                               flights=[self.dataset.samples[i] for i in batch]))+'\n')
             yield batch
-
-
-class AuditedTrainer(Trainer):
-    """Use Trainer's unchanged epoch/selection logic with structured loss and RNG audits."""
-    def __init__(self, model: OC_iVAE, train_loader: DataLoader, val_loader: DataLoader,
-                 config: dict, run_dir: Path, device: str) -> None:
-        super().__init__(model,train_loader,val_loader,config,device)
-        self.run_dir=run_dir; self.audit_rows: list[dict[str, Any]]=[]
-        self._train_losses: dict[str,float]={}; self._start_rng=''; self._end_rng=''
-
-    def train_epoch(self) -> dict:
-        self._start_rng=rng_digest()
-        values=super().train_epoch()
-        self._end_rng=rng_digest()
-        self._train_losses={k:float(v.detach().cpu()) if isinstance(v,torch.Tensor) else float(v) for k,v in values.items()}
-        return values
-
-    def val_epoch(self) -> dict:
-        values=super().val_epoch()
-        sampler=self.train_loader.batch_sampler
-        row=dict(epoch=self.epoch,**self._train_losses,**values,
-                 lr=self.optimizer.param_groups[0]['lr'],
-                 best_val_before_epoch=self.best_val_recon if np.isfinite(self.best_val_recon) else None,
-                 selected_by_val_recon=values['val_recon'] < self.best_val_recon,
-                 rng_before_training=self._start_rng,rng_after_training=self._end_rng,
-                 rng_after_validation=rng_digest(),
-                 batch_sha256=hashlib.sha256(json.dumps(sampler.last_batches).encode()).hexdigest())
-        self.audit_rows.append(row)
-        with (self.run_dir/'training_metrics.csv').open('a',newline='') as output:
-            writer=csv.DictWriter(output,fieldnames=list(row))
-            if len(self.audit_rows)==1: writer.writeheader()
-            writer.writerow(row)
-        print(json.dumps(row),flush=True)
-        return values
-
-    def save_checkpoint(self, path: str) -> None:
-        # Metadata is passive; preserve the exact original best-val selection rule.
-        self.run_metadata['epochs_recorded']=self.epoch
-        self.run_metadata['rng_at_checkpoint']=rng_digest()
-        super().save_checkpoint(path)
 
 
 class Tee:
@@ -186,7 +138,7 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
                                   evaluation='runs/exp_tuning_mono_weight/evaluation_unsupervisedhi_v1_20261014_verified'),
                   training_budget=configs['true']['training'],
                   source_revision=original_revision,source_hashes={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in [
-                      Path('models/tcn.py'),Path('models/oc_ivae.py'),Path('models/vae.py'),Path('models/__init__.py'),Path('train/trainer.py'),Path('scripts/run_w_summary_ablation.py'),Path('loss/total.py'),Path('data/dataset.py'),Path('data/sampler.py'),Path('evaluate.py'),Path('utils/metrics.py')]},
+                      Path('models/tcn.py'),Path('models/oc_ivae.py'),Path('models/vae.py'),Path('models/__init__.py'),Path('train.py'),Path('scripts/run_w_summary_ablation.py'),Path('utils/losses.py'),Path('data/dataset.py'),Path('data/sampler.py'),Path('evaluate.py'),Path('utils/metrics.py')]},
                   random_rules=dict(python_numpy_torch_seed=42,sampler='default_rng(42 + epoch_counter)',
                                     deterministic_algorithms=True,cudnn_benchmark=False,num_workers=0,
                                     cpu_threads=torch.get_num_threads(),batch_sequence='recorded actual unit/cycle keys',
@@ -209,7 +161,6 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
         sampler=RecordedSampler(train,config['training'],run_dir/'batch_sequences.jsonl')
         train_loader=DataLoader(train,batch_sampler=sampler,num_workers=0)
         val_loader=DataLoader(val,batch_size=config['training']['k_units_per_batch']*config['training']['m_cycles_per_unit'],shuffle=False,num_workers=0)
-        trainer=AuditedTrainer(model,train_loader,val_loader,config,run_dir,device)
         torch.set_rng_state(training_rng)
         if cuda_rng: torch.cuda.set_rng_state_all(cuda_rng)
         started.append(role)
@@ -218,16 +169,16 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
             original_stdout=sys.stdout; sys.stdout=Tee(original_stdout,log)
             try:
                 print(f'Paired {role}: seed=42, initial_state={initial_digest}',flush=True)
-                trainer.train()
+                result=train_model(model,train_loader,val_loader,config,device,audit_dir=run_dir)
             finally:
                 sys.stdout=original_stdout
-        all_audits[role]=trainer.audit_rows
-        summary=dict(epochs_completed=trainer.epoch,best_val_recon=trainer.best_val_recon,
-                     best_checkpoint=str(Path(trainer.best_checkpoint_path).resolve()),
+        all_audits[role]=result['history']
+        summary=dict(epochs_completed=result['epochs_completed'],best_val_recon=result['best_val_recon'],
+                     best_checkpoint=str(Path(result['best_checkpoint']).resolve()),
                      initial_state_sha256=initial_digest,decoder_use_W_summary=config['model']['decoder_use_W_summary'])
         (run_dir/'training_summary.json').write_text(json.dumps(summary,indent=2))
         # Evaluation starts only after train/val selection is finished; test never informs selection.
-        eval_dir=run_evaluation(str(cfg_path),trainer.best_checkpoint_path,str(run_dir/'evaluation'),device)
+        eval_dir=run_evaluation(str(cfg_path),result['best_checkpoint'],str(run_dir/'evaluation'),device)
         metrics=json.loads((eval_dir/'metrics.json').read_text())
         for split in ['dev','test']:
             for key in ['mae','mape','monotonicity','trendability','fc','mi']:
@@ -235,7 +186,7 @@ def run_pair(output: Path, original_revision: str, device: str) -> None:
                     raise FloatingPointError(f'nonfinite {role}/{split}/{key}; stopping pair')
         summaries[role]=dict(training=summary,evaluation=metrics)
         # Release optimizer and model graph before constructing the next run.
-        del trainer,model,train_loader,val_loader
+        del result,model,train_loader,val_loader
     common=min(len(all_audits['true']),len(all_audits['false']))
     for index in range(common):
         for key in ['rng_before_training','rng_after_training','rng_after_validation','batch_sha256','lr']:

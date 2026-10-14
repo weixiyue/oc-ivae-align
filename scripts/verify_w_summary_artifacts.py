@@ -102,7 +102,7 @@ def verify_artifacts(root: Path) -> dict[str, Any]:
                                   scaled_frames['false'][['split','unit','cycle','hi_gt','rul']])
     source_hashes_verified=[]
     for source,expected in manifest['source_hashes'].items():
-        if source == 'model/decoder.py':
+        if source in {'model/decoder.py', 'loss/total.py'}:
             # The historical experiment records the executed commit separately
             # from the pre-switch revision used by its smoke comparison.
             revision = (root/'code_commit.txt').read_text().strip()

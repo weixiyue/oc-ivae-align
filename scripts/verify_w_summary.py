@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from data.sampler import UnitStratifiedSampler
 from models.tcn import TCNDecoder
 from models.oc_ivae import OC_iVAE
-from train.trainer import Trainer
+from train import load_checkpoint, save_checkpoint
 
 
 def verify_switch(work_dir: Path, original_revision: str, checkpoint: Path) -> dict[str, Any]:
@@ -100,20 +100,24 @@ def verify_switch(work_dir: Path, original_revision: str, checkpoint: Path) -> d
     # Checkpoint metadata roundtrip, explicit false reload, and legacy default true.
     training_raw=copy.deepcopy(raw)
     training_raw['model']=dict(cfg,decoder_use_W_summary=False)
-    training_raw['checkpoint_dir']=str(work_dir/'checkpoints')
-    trainer=Trainer(model_false, [], [], training_raw)
-    saved=work_dir/'false.pt'; trainer.save_checkpoint(str(saved))
+    optimizer=torch.optim.AdamW(model_false.parameters(),lr=raw['training']['lr'],
+                                weight_decay=raw['training']['weight_decay'])
+    saved=work_dir/'false.pt'
+    save_checkpoint(saved,model_false,optimizer,training_raw,0,float('inf'))
     stored=torch.load(saved,map_location='cpu',weights_only=False)
     assert stored['decoder_use_W_summary'] is False
     assert stored['model_config']['decoder_use_W_summary'] is False
     reloaded=OC_iVAE(dict(cfg,decoder_use_W_summary=False)).eval()
-    loader=Trainer(reloaded,[],[],training_raw); loader.load_checkpoint(str(saved))
+    reload_optimizer=torch.optim.AdamW(reloaded.parameters(),lr=raw['training']['lr'],
+                                       weight_decay=raw['training']['weight_decay'])
+    load_checkpoint(saved,reloaded,reload_optimizer)
     for key,value in model_false.state_dict().items():
         torch.testing.assert_close(value,reloaded.state_dict()[key],rtol=0,atol=0)
-    legacy=Trainer(model_true,[],[],dict(raw,checkpoint_dir=str(work_dir/'legacy')))
-    legacy.load_checkpoint(str(checkpoint))
+    legacy_optimizer=torch.optim.AdamW(model_true.parameters(),lr=raw['training']['lr'],
+                                       weight_decay=raw['training']['weight_decay'])
+    load_checkpoint(checkpoint,model_true,legacy_optimizer)
     try:
-        loader.load_checkpoint(str(checkpoint))
+        load_checkpoint(checkpoint,reloaded,reload_optimizer)
     except ValueError:
         pass
     else:

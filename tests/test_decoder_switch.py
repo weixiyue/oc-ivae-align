@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from models.oc_ivae import OC_iVAE
 from models.tcn import TCNDecoder
 from scripts.verify_w_summary import verify_switch
-from train.trainer import Trainer
+from train import save_checkpoint, train_epoch
 
 
 def test_switch_smoke_with_legacy_checkpoint(tmp_path: Path):
@@ -18,8 +18,9 @@ def test_switch_smoke_with_legacy_checkpoint(tmp_path: Path):
     # Synthetic learned nonzero zd prior head, preserving the production zero init.
     with torch.no_grad():
         model.prior.zd_head.weight.fill_(.02)
-    trainer=Trainer(model,[],[],dict(raw,checkpoint_dir=str(tmp_path/'checkpoint')))
-    trainer.save_checkpoint(str(tmp_path/'new.pt'))
+    optimizer=torch.optim.AdamW(model.parameters(),lr=raw['training']['lr'],
+                                weight_decay=raw['training']['weight_decay'])
+    save_checkpoint(tmp_path/'new.pt',model,optimizer,raw,0,float('inf'))
     saved=torch.load(tmp_path/'new.pt',weights_only=False)
     legacy={key:saved[key] for key in ['model_state_dict','optimizer_state_dict','epoch','best_val_recon']}
     legacy['best_val_recon']=1.0
@@ -54,11 +55,12 @@ def test_nonfinite_training_stops_before_optimizer_step(tmp_path: Path):
     samples=[(torch.ones(8,14),torch.ones(8,dtype=torch.bool),torch.ones(11),torch.ones(8,4),
               torch.tensor(1),torch.tensor(i),torch.tensor(1.0)) for i in range(4)]
     train=DataLoader(samples,batch_size=4)
-    trainer=Trainer(model,train,train,dict(raw,checkpoint_dir=str(tmp_path/'checkpoint')))
+    optimizer=torch.optim.AdamW(model.parameters(),lr=raw['training']['lr'],
+                                weight_decay=raw['training']['weight_decay'])
+    settings={**raw['training'],**raw['loss_weights']}
     with pytest.raises(FloatingPointError,match='nonfinite training loss'):
-        trainer.train_epoch()
-    assert not trainer.optimizer.state
-    assert trainer.epoch==0
+        train_epoch(model,train,optimizer,0,settings,torch.device("cpu"))
+    assert not optimizer.state
 
 
 def test_existing_experiment_directory_is_untouched(tmp_path: Path, monkeypatch):
@@ -82,8 +84,9 @@ def test_nonfinite_clipping_norm_stops_before_optimizer_step(tmp_path: Path):
     samples=[(torch.ones(8,14),torch.ones(8,dtype=torch.bool),torch.ones(11),torch.ones(8,4),
               torch.tensor(1),torch.tensor(i),torch.tensor(1.0)) for i in range(4)]
     loader=DataLoader(samples,batch_size=4)
-    trainer=Trainer(model,loader,loader,dict(raw,checkpoint_dir=str(tmp_path/'checkpoint')))
+    optimizer=torch.optim.AdamW(model.parameters(),lr=raw['training']['lr'],
+                                weight_decay=raw['training']['weight_decay'])
+    settings={**raw['training'],**raw['loss_weights']}
     with pytest.raises((RuntimeError,FloatingPointError),match='non-finite|nonfinite'):
-        trainer.train_epoch()
-    assert not trainer.optimizer.state
-    assert trainer.epoch==0
+        train_epoch(model,loader,optimizer,0,settings,torch.device("cpu"))
+    assert not optimizer.state
