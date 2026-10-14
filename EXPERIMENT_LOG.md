@@ -1,0 +1,200 @@
+# Experiment Log — OC-iVAE
+
+## 2026-06-04 | scaffold-complete | —
+- Git tag: v0.1-scaffold
+- 所有模块实现完毕并通过冒烟测试
+- 关键设计决策：
+  - 使用全生命周期数据（含hs=0），663个training cycles
+  - k=7（DS03只有9个unit，val占2个）
+  - W_seq和u均用全局统计量归一化
+- 待验证：正式训练100epoch后的HI曲线形态
+
+
+## 2026-06-04 20:34:04 | training-run | configs/ds03_default.yaml
+- Epochs completed: 11
+- Best val recon: 0.949809
+- Checkpoint: checkpoints/best_model.pt
+- Train monotonicity: -0.014172
+- Train trendability: 0.253116
+- Train prognosability: 0.754236
+
+## 2026-06-04 | baseline | configs/ds03_default.yaml
+- Git tag: v0.1-baseline
+- Monotonicity:  -0.014
+- Trendability:   0.253
+- Prognosability: 0.754
+- 问题：早期振荡严重，hi_raw范围窄(-0.09~-0.01)
+- 下一步：exp/tuning-mono-weight，lambda_mono 2→10，lambda_spearman 0.5→2
+
+## 2026-06-08 | tuning-mono-weight | configs/exp_tuning_mono_weight.yaml
+- 调整：lambda_mono=10, lambda_spearman=2, warmup缩短至5epoch
+- 期望：早期振荡减少，Mono>0.2
+
+## 2026-06-08 09:36:21 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 52
+- Best val recon: 0.944035
+- Checkpoint: checkpoints/best_model.pt
+- Train monotonicity: 0.360256
+- Train trendability: 0.867270
+- Train prognosability: 0.638577
+
+## 2026-06-08 | tuning-mono-weight | configs/exp_tuning_mono_weight.yaml
+- Git tag: v0.2-tuning-mono
+- Monotonicity:  0.360
+- Trendability:  0.867
+- Prognosability: 0.639
+- 结论：lambda_mono=10, lambda_spearman=2 显著改善曲线形态
+- 残留问题：EOL值不一致（Unit3/7约0.3，Unit1/2/4约0.0），Prog偏低
+- 下一步：提高 lambda_mono 或调整 EWMA alpha
+
+## 2026-06-08 10:50:22 | training-run | configs/exp_tuning_mape_prog.yaml
+- Epochs completed: 7
+- Best val recon: 0.996979
+- Checkpoint: checkpoints/exp_tuning_mape_prog/best_model.pt
+- Train monotonicity: 0.111151
+- Train trendability: 0.681054
+- Train prognosability: 0.703521
+
+## 2026-06-08 11:01:34 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 38
+- Best val recon: 0.943932
+- Checkpoint: checkpoints/exp_tuning_mono_weight/best_model.pt
+- Train monotonicity: 0.243597
+- Train trendability: 0.846248
+- Train prognosability: 0.707967
+
+## 2026-06-08 11:04:40 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 14
+- Best val recon: 0.992187
+- Checkpoint: checkpoints/exp_tuning_mono_weight/best_model.pt
+- Train monotonicity: 0.034007
+- Train trendability: 0.200472
+- Train prognosability: 0.752074
+
+## 2026-06-08 11:14:14 | training-run | configs/exp_tuning_mape_prog.yaml
+- Epochs completed: 92
+- Best val recon: 0.946047
+- Checkpoint: checkpoints/exp_tuning_mape_prog/best_model.pt
+- Train monotonicity: 0.406319
+- Train trendability: 0.880280
+- Train prognosability: 0.720473
+
+## 2026-06-08 11:20:20 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 80
+- Best val recon: 0.939700
+- Checkpoint: checkpoints/exp_tuning_mono_weight/best_model.pt
+- Train monotonicity: 0.438071
+- Train trendability: 0.872562
+- Train prognosability: 0.715775
+
+## 2026-06-08 11:37:32 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 82
+- Best val recon: 0.955154
+- Checkpoint: checkpoints/exp_tuning_mono_weight/best_model.pt
+- Train monotonicity: 0.411648
+- Train trendability: 0.885804
+- Train prognosability: 0.657994
+
+## 2026-06-08 11:39:22 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 94
+- Best val recon: 0.946734
+- Checkpoint: checkpoints/exp_tuning_mono_weight/best_model.pt
+- Train monotonicity: 0.450450
+- Train trendability: 0.931190
+- Train prognosability: 0.673556
+
+## 2026-06-08 11:41:16 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 100
+- Best val recon: 0.949574
+- Checkpoint: checkpoints/exp_tuning_mono_weight/best_model.pt
+- Train monotonicity: 0.424149
+- Train trendability: 0.868048
+- Train prognosability: 0.675965
+
+## 2026-06-08 16:46:39 | training-run | configs/exp_tuning_mono_weight.yaml
+- Epochs completed: 80
+- Best val recon: 0.941424
+- Checkpoint: checkpoints/exp_tuning_mono_weight/best_model.pt
+- Train monotonicity: 0.454861
+- Train trendability: 0.879185
+- Train prognosability: 0.667217
+
+## 2026-06-08 16:59:14 | training-run | configs/exp_tuning_mape_prog.yaml
+- Epochs completed: 98
+- Best val recon: 0.940703
+- Checkpoint: checkpoints/exp_tuning_mape_prog/best_model.pt
+- Train monotonicity: 0.408781
+- Train trendability: 0.866894
+- Train prognosability: 0.716992
+
+## 2026-06-08 19:15:29 | training-run | configs/ds02_default.yaml
+- Epochs completed: 94
+- Best val recon: 0.898116
+- Checkpoint: checkpoints/ds02_default/best_model.pt
+- Train monotonicity: 0.544424
+- Train trendability: 0.910155
+- Train prognosability: 0.907932
+
+## 2026-06-08 19:20:19 | training-run | configs/exp_tuning_mape_prog.yaml
+- Epochs completed: 98
+- Best val recon: 0.949053
+- Checkpoint: checkpoints/exp_tuning_mape_prog/best_model.pt
+- Train monotonicity: 0.511930
+- Train trendability: 0.877569
+- Train prognosability: 0.717638
+
+## 2026-06-10 11:03:49 | training-run | configs/ds03_cvae_baseline.yaml
+- Epochs completed: 99
+- Best val recon: 0.936355
+- Checkpoint: checkpoints/ds03_cvae_baseline/best_model.pt
+- Train monotonicity: 0.349471
+- Train trendability: 0.874502
+- Train prognosability: 0.710655
+
+## 2026-06-10 11:11:47 | training-run | configs/ds03_default.yaml
+- Epochs completed: 86
+- Best val recon: 0.932811
+- Checkpoint: checkpoints/ds03_default/best_model.pt
+- Train monotonicity: 0.430144
+- Train trendability: 0.892060
+- Train prognosability: 0.666290
+
+## 2026-06-10 11:32:49 | training-run | configs/ds03_vae_baseline.yaml
+- Epochs completed: 12
+- Best val recon: 0.939890
+- Checkpoint: checkpoints/ds03_vae_baseline/best_model.pt
+- Train monotonicity: -0.001911
+- Train trendability: 0.216524
+- Train prognosability: 0.775265
+
+## 2026-06-10 11:33:55 | training-run | configs/ds03_vae_baseline.yaml
+- Epochs completed: 86
+- Best val recon: 0.926920
+- Checkpoint: checkpoints/ds03_vae_baseline/best_model.pt
+- Train monotonicity: 0.238231
+- Train trendability: 0.838297
+- Train prognosability: 0.761022
+
+## 2026-06-10 16:08:59 | training-run | configs/ds03_ablation_no_hsic.yaml
+- Epochs completed: 80
+- Best val recon: 0.933088
+- Checkpoint: checkpoints/ds03_ablation_no_hsic/best_model.pt
+- Train monotonicity: 0.347886
+- Train trendability: 0.888520
+- Train prognosability: 0.677401
+
+## 2026-06-10 16:20:38 | training-run | configs/ds03_ablation_no_mono.yaml
+- Epochs completed: 11
+- Best val recon: 0.930429
+- Checkpoint: checkpoints/ds03_ablation_no_mono/best_model.pt
+- Train monotonicity: -0.023460
+- Train trendability: 0.254736
+- Train prognosability: 0.719007
+
+## 2026-06-10 16:22:22 | training-run | configs/ds03_ablation_no_mono.yaml
+- Epochs completed: 83
+- Best val recon: 0.930379
+- Checkpoint: checkpoints/ds03_ablation_no_mono/best_model.pt
+- Train monotonicity: 0.278650
+- Train trendability: 0.874381
+- Train prognosability: 0.734160

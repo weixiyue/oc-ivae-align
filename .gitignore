@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+*.h5
+data/raw/
+runs/
+checkpoints/
+*.log
+.DS_Store
