@@ -234,3 +234,13 @@
 | mi | 0.710474693 | 0.721305980 | 0.721354326 | 0.735425004 |
 
 **Notes**: Historical checkpoint initialization cannot be verified, so two new runs were used; selected epochs true=82, false=84. Initialization and actual 100-epoch batch/RNG/LR traces match. False improves all six test metrics; dev monotonicity/FC slightly decrease. Curves mostly overlap, test average absolute difference=0.014187. The current pair does not support direct decoder W-summary as the necessary source of HI performance; no claim about all model advantages or physical disentanglement. Formal output/validation: `runs/w_summary_ablation_seed42_20261014/EXPERIMENT_REPORT.md`. No extra seeds, structures or test-driven changes; legacy checkpoint/results preserved.
+
+## 2026-10-15 11:59:37 | training-run | config/ds03_default.yaml
+- Epochs completed: 100
+- Checkpoint: runs/ds03_default/best.pt
+- Unified all-dev/test evaluation: runs/ds03_default
+
+## 2026-10-15 12:05:56 | training-run | config/exp_tuning_mono_weight.yaml
+- Epochs completed: 100
+- Checkpoint: runs/exp_tuning_mono_weight/best.pt
+- Unified all-dev/test evaluation: runs/exp_tuning_mono_weight
