@@ -139,17 +139,16 @@ checkpoint 保存 state_dict 字典。新文件保留已有参数 keys 和保存
 ## 验证与文档
 
 按用户批准已删除整个 tests/，没有保留 pytest 运行入口；删除前最后一次为 15 passed。
-现有轻量 W-summary/checkpoint 核验不训练模型，但会写入新的检查目录：
+W-summary 配对脚本在运行时检查配置、共享初始权重和共同训练 epochs 的 batch/RNG/学习率摘要，
+摘要保存在 history 和配置中。不再提供独立 verify 命令，也不依赖旧 Git revision 或历史 checkpoint。
+历史审计报告保留原有记录；新实验不生成额外的历史对照或验证目录。
+
+CUDA 配对实验须在启动 Python 前设置确定性计算环境变量：
 
 ```bash
-python -m experiments.verify_w_summary \
-  --work-dir runs/w_summary_smoke_new \
-  --original-revision 4c38401d0a5fd0f2b536c26da93fd60d42d3e6c4 \
-  --checkpoint checkpoints/exp_tuning_mono_weight/best_model.pt
+CUBLAS_WORKSPACE_CONFIG=:4096:8 python -m experiments.run_w_summary_ablation \
+  --output-dir runs/w_summary_pair_cuda_new --device cuda --threads 2
 ```
-
-`experiments.verify_w_summary_artifacts` 只核验正式 DS03 配对实验产物，不重跑训练/推理；
-保留正式 100 轮和 flight 数量检查，并会写核验报告。历史目录的检查应在独立副本上进行。
 
 重构证据见 [第一步](docs/REFACTOR_STEP1.md)、[第二步](docs/REFACTOR_STEP2.md)、
 [第三步](docs/REFACTOR_STEP3.md)、[第四步](docs/REFACTOR_STEP4.md)、[第五步](docs/REFACTOR_STEP5.md)。
