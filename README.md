@@ -109,6 +109,31 @@ python -m experiments.run_w_summary_ablation \
 该命令会执行两次真实训练，仍使用现有两份 seed-42 YAML；应在明确安排实验后运行。
 本轮只在隔离的短合成配置上核验调度，没有重跑正式配对训练。
 
+每次配对实验保存 13 个文件：
+
+```text
+runs/<experiment_name>/
+    comparison.csv
+    comparison_curves_dev.png
+    comparison_curves_test.png
+    true/
+        config.yaml
+        best.pt
+        history.csv
+        metrics.json
+        scores.csv
+    false/
+        config.yaml
+        best.pt
+        history.csv
+        metrics.json
+        scores.csv
+```
+
+`comparison.csv` 包含两组 dev/test 六项指标和 false 减 true 的差值；
+两张图按发动机展示两组 HI 与参考 HI。每组不再单独生成曲线。
+共同完成 epochs 的配对审计结果保存在各组 `config.yaml` 的 `run_metadata.paired_audit` 中。
+
 ## 数据与评估协议
 
 输入为 N-CMAPSS HDF5 的 `A/W/X_s/Y`，按 unit/cycle 分组并覆盖完整生命周期。
@@ -125,8 +150,10 @@ python -m experiments.run_w_summary_ablation \
 
 ## 运行产物与复现范围
 
-新运行保存 `config.yaml`、`best.pt`、`history.csv`、`metrics.json`、`scores.csv`、
-`scaler.json`、`evaluation_config.yaml` 和 dev/test 曲线。
+训练并自动评估后保存 `config.yaml`、`best.pt`、`history.csv`、`metrics.json` 和 `scores.csv`。
+普通训练和独立评估仍生成 dev/test 曲线；独立评估只保存评估结果及曲线。
+归一化参数保存在 `metrics.json` 的 `metadata.scaling`，完整评估出处和配置保存在 `metadata`，
+不再额外生成 `scaler.json` 或 `evaluation_config.yaml`。已有运行文件保持原样。
 snapshot 记录实际维度、路径、源配置、已知 seed、初始权重/RNG hash、设备和线程。
 普通入口保留原未固定初始化 seed 的行为：实际 seed 未指定时记录 null，
 YAML 中的 configured_seed 单独记录；配对脚本明确设置 seed=42。

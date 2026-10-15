@@ -100,7 +100,9 @@ scale_dev_test() 只在全 dev score 上拟合 sklearn MinMaxScaler，transform 
 MAE/MAPE 按 cycle 聚合；structural/MI 按原公式跨 unit 聚合，MI random_state=42。
 常量输出、短序列、非正 FC 分母和缺少 HI 标签保持明确诊断，非有限指标转成 JSON null。
 
-scores.csv 保留 split/unit/cycle/score/hi/hi_gt/rul；同时保存 scaler、配置出处和曲线。
+scores.csv 保留 split/unit/cycle/score/hi/hi_gt/rul；metrics.json 的 metadata 保存 scaler 和配置出处。
+run_evaluation() 默认生成 dev/test 曲线；配对脚本传入 save_plots=False，改为绘制两组合并对比图。
+不再单独输出 scaler.json 和 evaluation_config.yaml，历史文件原地保留。
 匹配的新训练目录可接受第一次评估，重复评估必须用新目录。
 历史 per-unit/EWMA 工具已删除，相关历史报告和结果未删除。
 

@@ -34,6 +34,8 @@ def run_evaluation(
     checkpoint_path: str | None = None,
     output_dir: str | None = None,
     device: str | None = None,
+    *,
+    save_plots: bool = True,
 ) -> Path:
     """Evaluate all dev/test flights with one dev-only scaler and save an isolated run.
 
@@ -42,8 +44,9 @@ def run_evaluation(
         checkpoint_path: Old model-state checkpoint or bare state dictionary.
         output_dir: New directory, or the matching training run awaiting its first evaluation.
         device: Optional inference device; otherwise select available CUDA or CPU.
+        save_plots: Save per-split HI curves; paired experiments draw combined curves.
     Returns:
-        Evaluation directory with scores, metrics, scaler and provenance.
+        Evaluation directory with scores, metrics (including scaler/provenance), and optional curves.
     """
     with open(config_path, encoding='utf-8') as file:
         raw = yaml.safe_load(file)
@@ -68,8 +71,7 @@ def run_evaluation(
     if existing_run:
         destination = Path(output_dir)
         # Only a matching fresh training run may receive its first evaluation.
-        artifacts = ['scores.csv', 'metrics.json', 'scaler.json', 'evaluation_config.yaml',
-                     'hi_curves_dev.png', 'hi_curves_test.png']
+        artifacts = ['scores.csv', 'metrics.json', 'hi_curves_dev.png', 'hi_curves_test.png']
         if (Path(config_path).resolve() != (destination / 'config.yaml').resolve()
                 or checkpoint_file.resolve() != (destination / 'best.pt').resolve()
                 or not (destination / 'history.csv').is_file()
@@ -162,21 +164,19 @@ def run_evaluation(
     predictions[['split', 'unit', 'cycle', 'score', 'hi', 'hi_gt', 'rul']].to_csv(
         destination / 'scores.csv', index=False,
     )
-    for name, content in [('metrics.json', dict(metadata=metadata, **metrics)), ('scaler.json', scaler)]:
-        (destination / name).write_text(
-            json.dumps(content, indent=2, allow_nan=False), encoding='utf-8',
-        )
-    (destination / 'evaluation_config.yaml').write_text(
-        yaml.safe_dump(metadata, sort_keys=False), encoding='utf-8',
+    (destination / 'metrics.json').write_text(
+        json.dumps(dict(metadata=metadata, **metrics), indent=2, allow_nan=False),
+        encoding='utf-8',
     )
-    _plot_curves(dev, destination / 'hi_curves_dev.png')
-    _plot_curves(test, destination / 'hi_curves_test.png')
+    if save_plots:
+        _plot_curves(dev, destination / 'hi_curves_dev.png')
+        _plot_curves(test, destination / 'hi_curves_test.png')
     for split, values in metrics.items():
         print(split, {k: values[k] for k in ['mae','mape','monotonicity','trendability','fc','mi']}, flush=True)
         if values['issues']:
             print('Diagnostics:', values['issues'], flush=True)
     if scaler['constant_dev_output']:
-        print('Degenerate dev scores: constant MinMaxScaler input; see scaler.json', flush=True)
+        print('Degenerate dev scores: constant MinMaxScaler input; see metrics.json metadata.scaling', flush=True)
     print(f'Evaluation saved to: {destination}', flush=True)
     return destination
 

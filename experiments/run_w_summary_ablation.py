@@ -140,6 +140,7 @@ def run_pair(output: Path, device: str) -> None:
         # Test evaluation happens only after validation-based checkpoint selection.
         eval_dir = run_evaluation(
             str(run_dir / 'config.yaml'), result['best_checkpoint'], str(run_dir), device,
+            save_plots=False,
         )
         metrics = json.loads((eval_dir / 'metrics.json').read_text())
         for split in ('dev', 'test'):
