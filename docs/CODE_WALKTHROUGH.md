@@ -1,6 +1,6 @@
 # 当前代码走读
 
-更新：2026-10-14。本文描述简化重构后的实现，旧走读保留在
+更新：2026-10-15。本文描述简化重构后的实现，旧走读保留在
 [history/CODE_WALKTHROUGH_pre_refactor.md](history/CODE_WALKTHROUGH_pre_refactor.md)。
 入口与环境准备见 [README](../README.md)。
 
@@ -9,7 +9,7 @@
 | 文件 | 主要职责 |
 | --- | --- |
 | dataset.py | NCMAPSSDataset、unit split、HI lookup、UnitStratifiedSampler |
-| utils/preprocess.py | HDF5 读取、cycle 分组、统计、归一化、padding/truncation、u |
+| utils/preprocess.py | 离线/首次自动预处理、HDF5 缓存、cycle 分组、统计、归一化、u、RUL 校验 |
 | models/tcn.py | causal encoder、masked LayerNorm、non-causal decoder、W summary |
 | models/oc_ivae.py | OC-iVAE 装配、两个 posterior、FiLM、conditional prior、HI head |
 | models/vae.py | 标准正态先验与两个 baseline 的组件替换 |
@@ -18,7 +18,7 @@
 | train.py | 训练/验证、AdamW/LR、best selection、checkpoint、history/审计 |
 | evaluate.py | 推理、flight 关联、dev-only scaler、评估和导出 |
 | utils/metrics.py | 六项指标、聚合方式、非有限值诊断 |
-| experiments/ | 配对初始化、采样记录、调度、比较与现有产物核验 |
+| experiments/ | 配对初始化、内存采样记录、调度、一致性检查与比较 |
 
 ## 数据链路
 
@@ -26,6 +26,9 @@
 A/W/X_s/Y HDF5
   → unit/cycle 分组与逐 cycle 下采样
   → L_max、传感器/W 统计
+  → 归一化、padding/truncation、完整 cycle 的 u 和原始周期 RUL
+  → data/processed/<原文件名>_<处理标识>.h5
+  → Dataset 读取张量、选择 train/val units、独立关联 HI
   → (x, mask, u, W_seq, unit_id, cycle_id, hi)
   → Sampler + DataLoader
   → model.forward()
@@ -42,6 +45,12 @@ u 是完整下采样 cycle 的 W mean/std 与 Fc one-hot；
 W_seq 经同源归一化、padding/truncation 后送入 decoder。
 decoder 根据有效 mask 再计算 mean/std，不能把它改为直接取 u 前八维。
 HI lookup 在 Dataset 中沿用 per-unit 行序；评估另做严格 flight-key 关联。
+
+prepare_data() 由独立 CLI 或 Dataset 调用，命中时只核对原文件信息和缓存元信息。
+先写临时文件，全部成功后以不覆盖已有文件的方式发布；失败清理本次临时文件。
+Dataset 不再保留原始 cycles，也不在 __getitem__ 中重复处理。采样所需 keys/order 保持不变。
+预处理同时准备 dev/test，原始 Y 的周期内恒定性检查提前到首次生成，不影响有效数据的结果。
+旧 Dataset 的 train_stats/L_max 注入接口由缓存中的固定 dev→test 统计关系取代，当前调用处已更新。
 
 Sampler 用 random_seed + epoch_counter 的局部 NumPy RNG。
 有效 K 为 min(K, unit 数)，不足 M 个 cycle 时有放回采样；
@@ -92,7 +101,7 @@ load_checkpoint() 只恢复原有状态，不完整恢复 scheduler、sampler �
 ## 评估链路
 
 predict_cycles() 使用 batch size 64、posterior mean，直接生成 float64 unit/cycle/score 表。
-read_rul()/read_reference()/associate() 检查标签、真实 cycle 键和一对一覆盖；
+周期 RUL 已由预处理检查并保存；read_reference()/associate() 检查标签、真实 cycle 键和一对一覆盖；
 没有 window 平均分支，重复 flight 明确报错。
 
 scale_dev_test() 只在全 dev score 上拟合 sklearn MinMaxScaler，transform 两个 split，

@@ -372,6 +372,7 @@ def main() -> None:
     config['model'] = model_config
     config['run_metadata'] = dict(
         source_config=str(config_path.resolve()), split_seed=42, sampler_seed=42,
+        processed_data=str(train_dataset.processed_path),
     )
     result = train_model(model, train_loader, val_loader, config, device, run_dir=run_dir)
     evaluation_dir = run_evaluation(

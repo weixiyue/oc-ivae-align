@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import h5py
 import numpy as np
 import pandas as pd
 import sklearn
@@ -84,7 +83,6 @@ def run_evaluation(
     flat['in_features'] = int(dev_dataset[0][0].shape[-1])
     test_dataset = NCMAPSSDataset(
         h5_path, None, flat, split='test',
-        train_stats=dev_dataset.get_train_stats(), L_max=dev_dataset.L_max,
     )
     model = build_model(raw, flat)
     checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
@@ -96,7 +94,7 @@ def run_evaluation(
     frames: dict[str, pd.DataFrame] = {}
     reference_meta: dict[str, dict[str, Any]] = {}
     for split, dataset in [('dev', dev_dataset), ('test', test_dataset)]:
-        rul = read_rul(h5_path, split)
+        rul = dataset.rul
         path = _resolve_cycle_hi_path(flat, h5_path, split)
         ref, provenance = read_reference(path, rul)
         frames[split] = associate(predict_cycles(model, dataset, device=device), rul, ref)
@@ -154,6 +152,7 @@ def run_evaluation(
         reference_HI=reference_meta, scaling=scaler,
         n_cycles={s: len(f) for s, f in [('dev', dev), ('test', test)]},
         L_max=dev_dataset.L_max, in_features=flat['in_features'],
+        processed_data=str(dev_dataset.processed_path),
         postprocessing=dict(
             per_unit_scaling=False, ewma=False, smoothing=False, clipping=False,
         ),
@@ -222,35 +221,6 @@ def validate_keys(frame: pd.DataFrame, name: str) -> None:
         raise ValueError(f'{name}: invalid unit/cycle keys')
     if frame.duplicated(['unit', 'cycle']).any():
         raise ValueError(f'{name}: duplicate unit/cycle keys')
-
-
-def read_rul(h5_path: str, split: str) -> pd.DataFrame:
-    """Read original Y and reject RUL changes within a flight before downsampling.
-
-    Args:
-        h5_path: Original N-CMAPSS file.
-        split: Original dev or test split.
-    Returns:
-        Sorted unique unit/cycle/RUL rows.
-    """
-    with h5py.File(h5_path, 'r') as source:
-        def array(key: str) -> np.ndarray:
-            for candidate in [f'{key}_{split}', f'{split}/{key}', key]:
-                if candidate in source:
-                    return np.asarray(source[candidate])
-            raise KeyError(f'missing {key} for {split}')
-        a, y = array('A'), array('Y')
-    if y.shape not in [(len(a),), (len(a), 1)]:
-        raise ValueError('Y must contain one original RUL value per row')
-    rows = pd.DataFrame({'unit': a[:, 0], 'cycle': a[:, 1], 'rul': y.ravel()})
-    if not np.isfinite(rows.to_numpy()).all():
-        raise ValueError('nonfinite original A keys or Y RUL')
-    if not np.equal(rows[['unit','cycle']], np.floor(rows[['unit','cycle']])).all().all():
-        raise ValueError('fractional original flight keys')
-    grouped = rows.groupby(['unit', 'cycle'], sort=True).rul.agg(['min', 'max'])
-    if (grouped['min'] != grouped['max']).any():
-        raise ValueError('original Y RUL is not constant within flight')
-    return grouped['min'].rename('rul').reset_index().astype({'unit': int, 'cycle': int})
 
 
 def read_reference(path: str | None, keys: pd.DataFrame) -> tuple[pd.DataFrame, str]:

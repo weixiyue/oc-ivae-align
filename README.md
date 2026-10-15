@@ -33,9 +33,9 @@ utils/
     losses.py                 # 重构、KL、HSIC、ranking、soft Spearman
     metrics.py                # 独立指标公式
 config/                       # 全部独立实验 YAML
-experiments/                  # 配对实验及现有核验工具
+experiments/                  # 配对实验调度与比较
 data/raw/                     # 原有符号链接
-data/processed/               # 预留的生成数据目录，Git 忽略
+data/processed/               # 可复用的预处理 HDF5，Git 忽略
 runs/                         # 新运行配置、checkpoint、history 和评估结果
 checkpoints/                  # 既有 checkpoint，原地保留
 docs/                         # 当前说明、设计和历史验证资料
@@ -43,7 +43,30 @@ docs/                         # 当前说明、设计和历史验证资料
 
 当前 `data/raw` 链接到 `/home/xiyue/CodeSpace/raw/`。保留链接及其目标，不递归移动、删除或复制原始数据。
 当前可用的是 DS03 主文件与 dev/test cycle-HI 文件；DS02 主文件缺失。
-预处理由 Dataset 在线执行，没有独立预处理 CLI，也没有新增 processed 数据格式。
+
+## 数据预处理
+
+可在训练前预处理一次：
+
+```bash
+python -m utils.preprocess --config config/exp_tuning_mono_weight.yaml
+```
+
+结果保存为 `data/processed/<原文件名>_<处理标识>.h5`，包含 dev/test 的
+`x`、`mask`、`W_seq`、`u`、unit/cycle、周期 RUL、归一化统计量和 `L_max`。
+HI 参考仍独立读取，不写入模型输入缓存。预处理不使用模型参数，也不消耗训练随机状态。
+
+未手动预处理时，训练或评估首次启动会提示并自动生成；之后相同数据和处理参数直接复用。
+Dataset 只加载所选 unit 的已处理张量到内存，取样时不再重复归一化或构造 `u`。
+训练、评估、不同模型及配对实验共享处理文件，train/val 的 seed 和比例不影响缓存标识。
+首次生成同时准备 dev/test，test 不参与训练目标、模型选择或 dev 统计量计算。
+
+处理标识包含原文件实际路径、大小、纳秒修改时间、降采样因子、`n_fc` 和预处理版本。
+数据或参数变化生成新的文件，不覆盖旧文件；缓存损坏或不匹配会报错，不自动重建。
+文件信息检查不扫描原始文件内容，无法识别刻意保持路径、大小和修改时间的内容替换。
+预处理算法变化时需更新 `utils/preprocess.py` 的 `PROCESSED_VERSION`。
+可在 YAML 的 `data.processed_dir` 指定另一处理目录；默认目录及生成数据均不提交 Git。
+运行快照记录实际 `processed_data` 路径，仍需保留原文件以核对来源信息。
 
 ## 训练与评估
 

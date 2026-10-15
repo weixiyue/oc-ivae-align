@@ -1,6 +1,17 @@
 """Preprocessing utilities for flat N-CMAPSS h5 files."""
 
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+
+import h5py
 import numpy as np
+import pandas as pd
 import torch
 
 _A_UNIT_COL = 0
@@ -24,11 +35,6 @@ def load_h5(h5_path: str, split: str = "dev") -> dict[str, np.ndarray]:
     split_name = split.lower()
     if split_name not in {"dev", "test"}:
         raise ValueError("split must be either 'dev' or 'test'")
-
-    try:
-        h5py = __import__("h5py")
-    except ImportError as exc:
-        raise ImportError("load_h5 requires h5py to read N-CMAPSS files") from exc
 
     arrays: dict[str, np.ndarray] = {}
     with h5py.File(h5_path, "r") as h5_file:
@@ -390,3 +396,144 @@ def _tail_truncate_or_head_pad(
     W_out[start:] = W
     mask[start:] = True
     return x_out, W_out, mask
+
+
+# Increment when preprocessing computations or the stored schema change.
+PROCESSED_VERSION = 1
+PROCESSED_DIR = Path(__file__).resolve().parents[1] / 'data/processed'
+
+
+def prepare_data(h5_path: str, config: dict) -> Path:
+    """Reuse or build model-ready dev/test tensors without overwriting a cache.
+
+    The cache identity excludes model settings and unit split seeds. Test uses
+    dev W statistics and L_max, and dev sensor statistics for matching unit ids.
+    Labels are kept separate from model inputs. Source identity uses file stats,
+    not a full content hash, to avoid rereading the raw file on every launch.
+    """
+    source = Path(h5_path).resolve(strict=True)
+    parameters = {}
+    for key in ('downsample_factor', 'n_fc'):
+        value = config.get(key)
+        if not isinstance(value, (int, np.integer)) or isinstance(value, bool) or value < 1:
+            raise ValueError(f'data.{key} must be a positive integer')
+        parameters[key] = int(value)
+    stat = source.stat()
+    metadata = dict(
+        version=PROCESSED_VERSION, source=str(source), size=stat.st_size,
+        mtime_ns=stat.st_mtime_ns, **parameters,
+    )
+    encoded = json.dumps(metadata, sort_keys=True)
+    identity = hashlib.sha256(encoded.encode()).hexdigest()[:20]
+    directory = Path(config.get('processed_dir', PROCESSED_DIR)).resolve()
+    destination = directory / f'{source.stem}_{identity}.h5'
+    if destination.exists():
+        with h5py.File(destination, 'r') as cached:
+            if cached.attrs.get('metadata') != encoded or not cached.attrs.get('complete', False):
+                raise ValueError(f'invalid processed data: {destination}')
+        return destination
+
+    directory.mkdir(parents=True, exist_ok=True)
+    print(f'Preparing N-CMAPSS data: {source} -> {destination}', flush=True)
+    # Publish only a completed file; exclusive linking never replaces an existing
+    # cache, including one created concurrently by another process.
+    with tempfile.NamedTemporaryFile(dir=directory, suffix='.tmp', delete=False) as temp:
+        temporary = Path(temp.name)
+    try:
+        with h5py.File(temporary, 'w') as target:
+            target.attrs['metadata'] = encoded
+            dev_stats = {}
+            W_mean = W_std = None
+            L_max = None
+            for split in ('dev', 'test'):
+                arrays = load_h5(str(source), split)
+                rul = cycle_rul(arrays['A'], arrays['Y'])
+                cycles = group_by_unit_cycle(
+                    arrays['A'], arrays['W'], arrays['X_s'],
+                    factor=parameters['downsample_factor'],
+                )
+                del arrays
+                keys = sorted(cycles)
+                units = sorted({unit for unit, _ in keys})
+                if split == 'dev':
+                    L_max = compute_Lmax(cycles)
+                    W_mean, W_std = compute_W_stats(cycles)
+                    dev_stats = {unit: compute_unit_stats(cycles, unit) for unit in units}
+                    stats = dev_stats
+                    target.attrs['L_max'] = L_max
+                    target.create_dataset('W_mean_global', data=W_mean)
+                    target.create_dataset('W_std_global', data=W_std)
+                else:
+                    stats = {
+                        unit: dev_stats[unit] if unit in dev_stats
+                        else compute_unit_stats(cycles, unit)
+                        for unit in units
+                    }
+                group = target.create_group(split)
+                group.create_dataset('keys', data=np.asarray(keys, dtype=np.int64))
+                ordered_rul = rul.set_index(['unit', 'cycle']).loc[keys, 'rul'].to_numpy()
+                group.create_dataset('rul', data=ordered_rul)
+                stat_group = group.create_group('sensor_stats')
+                stat_group.create_dataset('units', data=units)
+                for index, name in enumerate(('mean', 'std', 'valid_mask')):
+                    stat_group.create_dataset(name, data=np.stack([stats[unit][index] for unit in units]))
+                for index, key in enumerate(keys):
+                    cycle = cycles[key]
+                    mean, std, valid_mask = stats[key[0]]
+                    x, W_seq, mask = process_cycle(
+                        cycle, L_max, mean, std, valid_mask, W_mean, W_std,
+                    )
+                    u = construct_u(cycle['W'], cycle['Fc'], parameters['n_fc'], W_mean, W_std)
+                    for name, tensor in (('x', x), ('W_seq', W_seq), ('mask', mask), ('u', u)):
+                        array = tensor.numpy()
+                        if index == 0:
+                            group.create_dataset(
+                                name, shape=(len(keys), *array.shape), dtype=array.dtype,
+                                chunks=(1, *array.shape), compression='lzf',
+                            )
+                        group[name][index] = array
+                del cycles
+            if source.stat().st_size != metadata['size'] or source.stat().st_mtime_ns != metadata['mtime_ns']:
+                raise ValueError('raw data changed during preprocessing')
+            target.attrs['complete'] = True
+        os.link(temporary, destination)
+    finally:
+        temporary.unlink()
+    print(f'Prepared data saved: {destination}', flush=True)
+    return destination
+
+
+def cycle_rul(a: np.ndarray, y: np.ndarray) -> pd.DataFrame:
+    """Validate original rows and retain one unchanged RUL value per flight."""
+    if y.shape not in [(len(a),), (len(a), 1)]:
+        raise ValueError('Y must contain one original RUL value per row')
+    rows = pd.DataFrame({'unit': a[:, 0], 'cycle': a[:, 1], 'rul': y.ravel()})
+    if not np.isfinite(rows.to_numpy()).all():
+        raise ValueError('nonfinite original A keys or Y RUL')
+    if not np.equal(rows[['unit', 'cycle']], np.floor(rows[['unit', 'cycle']])).all().all():
+        raise ValueError('fractional original flight keys')
+    grouped = rows.groupby(['unit', 'cycle'], sort=True).rul.agg(['min', 'max'])
+    if (grouped['min'] != grouped['max']).any():
+        raise ValueError('original Y RUL is not constant within flight')
+    return grouped['min'].rename('rul').reset_index().astype({'unit': int, 'cycle': int})
+
+
+def main() -> None:
+    """Prepare or reuse the same processed file consumed by training/evaluation."""
+    import yaml
+    from train import _resolve_main_h5_path
+
+    parser = argparse.ArgumentParser(description='Prepare N-CMAPSS model inputs once.')
+    parser.add_argument('--config', required=True)
+    args = parser.parse_args()
+    with open(args.config, encoding='utf-8') as file:
+        config = yaml.safe_load(file)
+    if not isinstance(config, dict) or not isinstance(config.get('data'), dict):
+        raise ValueError('config must include a data mapping')
+    data = config['data']
+    path = prepare_data(str(_resolve_main_h5_path(data)), data)
+    print(f'Processed data: {path}')
+
+
+if __name__ == '__main__':
+    main()

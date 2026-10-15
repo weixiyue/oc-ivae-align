@@ -115,7 +115,7 @@ def run_pair(output: Path, device: str) -> None:
             deterministic_algorithms=True, torch_version=str(torch.__version__),
             numpy_version=np.__version__,
             training_start_rng='shared post-initialization Torch state',
-            sampler_seed=42, num_workers=0,
+            sampler_seed=42, num_workers=0, processed_data=str(train.processed_path),
         )
         seed_training(42)
         model = OC_iVAE(config['model'])

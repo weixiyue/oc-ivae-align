@@ -30,7 +30,10 @@ VAE 仍保留双 latent 分支及 decoder W 路径。当前未增加其他模型
 ## 数据与评价
 
 - data/raw 为现有链接，当前目标为 /home/xiyue/CodeSpace/raw/；只读取，不移动目标数据。
-- 当前可用 DS03，DS02 主 HDF5 缺失。processed/ 未生成缓存，没有新增输入格式。
+- 当前可用 DS03，DS02 主 HDF5 缺失。原始输入仍为 N-CMAPSS HDF5。
+- DS03 预处理结果已保存到 data/processed/，约 65 MB；十份 YAML 数值不变。
+- 首次自动生成或使用 utils.preprocess CLI，之后训练/评估/配对实验读取同一缓存。
+- 缓存保存最终张量、周期 RUL、统计量和来源信息；HI 参考独立关联，不进入训练目标。
 - 输入标准化、P90、完整生命周期、padding/truncation、W/u 和 unit 采样语义保持。
 - 全 dev 拟合全局 MinMaxScaler，test 只 transform，不平滑、不裁剪。
 - MAE、MAPE、Monotonicity、Trendability、FC、MI；无 HI 参考时 MAE/MAPE 为 null。
@@ -54,6 +57,16 @@ history、最佳权重、optimizer 状态、scores、scaler、指标、对比 CS
 与修改前一致；被移除的 scaler/评估配置文件内容完整保留于 metrics.metadata。
 关闭绘图不改变分数或指标；配对短训练验证输出恰好 13 个文件，history、最佳权重和对比结果不变。
 独立评估 CLI 默认曲线与重复目录拒绝覆盖检查通过；未运行 GPU 或正式数据训练。
+
+预处理缓存检查：变长周期、dead sensor、dev/test 重叠 unit ID 的合成数据上，
+全部输入张量、统计量、RUL、unit split 和采样序列与原在线处理一致。
+4 组模型输出/损失/梯度及 4 轮训练 history/最佳权重对照完全一致。
+缓存命中时禁用所有原始预处理函数仍可加载和取样；来源/参数变化生成新文件，
+不完整缓存报错，已有缓存未覆盖，离线 CLI 检查通过。
+短配对实验仍输出 13 个文件，两组配置和评估均记录相同 processed_data 路径。
+真实 DS03 缓存为 67,796,442 bytes。使用原 epoch-80 checkpoint 分别运行旧在线流程和缓存流程，
+663 dev/438 test 的 scores 和曲线逐字节一致，原 metrics/scaler/评估出处完全一致，
+仅新增 processed_data 来源字段；checkpoint hash 保持不变。未进行真实训练或 GPU 验证。
 
 历史 runs/checkpoints、实验日志、源码快照和设计结论保留。
 逐步证据见 REFACTOR_STEP1.md 至 REFACTOR_STEP5.md；旧状态原文保留在

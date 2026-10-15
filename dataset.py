@@ -7,20 +7,13 @@ from collections import defaultdict
 from collections.abc import Iterator
 from typing import Any
 
+import h5py
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from utils.preprocess import (
-    compute_Lmax,
-    compute_W_stats,
-    compute_unit_stats,
-    construct_u,
-    group_by_unit_cycle,
-    load_h5,
-    process_cycle,
-)
+from utils.preprocess import prepare_data
 
 
 class NCMAPSSDataset(Dataset):
@@ -34,21 +27,16 @@ class NCMAPSSDataset(Dataset):
         split: str = "train",
         val_fraction: float = 0.2,
         random_seed: int = 42,
-        train_stats: dict | None = None,
-        L_max: int | None = None,
     ) -> None:
-        """Load raw N-CMAPSS data, split units, and cache preprocessing metadata.
+        """Load cached tensors, then select units and independently attach HI.
 
         Args:
-            h5_path: Path to the main flat-row N-CMAPSS h5 file.
-            cycle_hi_path: Optional path to the cycle-level HI h5 file.
-                ``None`` disables ground-truth HI loading.
-            config: Dataset config with ``downsample_factor`` and ``n_fc``.
-            split: Unit split to expose, ``"train"``, ``"val"``, or ``"test"``.
-            val_fraction: Fraction of units assigned to validation.
-            random_seed: Seed used for deterministic unit splitting.
-            train_stats: Optional normalization stats exported from train data.
-            L_max: Optional shared sequence length from train data.
+            h5_path: Original N-CMAPSS source, used to identify prepared data.
+            cycle_hi_path: Optional cycle-HI reference; never stored in input cache.
+            config: Data settings, including optional processed_dir.
+            split: Train/val unit subset of dev, or the original test split.
+            val_fraction: Fraction of dev units reserved for validation.
+            random_seed: Seed for the unchanged unit split.
         """
         if split not in {"train", "val", "test"}:
             raise ValueError("split must be 'train', 'val', or 'test'")
@@ -58,20 +46,33 @@ class NCMAPSSDataset(Dataset):
         self.split = split
         self.val_fraction = val_fraction
         self.config = dict(config)
-        self.downsample_factor = _get_config_int(config, "downsample_factor")
-        self.n_fc = _get_config_int(config, "n_fc")
-        self.config["downsample_factor"] = self.downsample_factor
-        self.config["n_fc"] = self.n_fc
-
-        h5_split = "test" if self.split == "test" else "dev"
-        raw_arrays = load_h5(h5_path, split=h5_split)
-        self.cycles = group_by_unit_cycle(
-            raw_arrays["A"],
-            raw_arrays["W"],
-            raw_arrays["X_s"],
-            factor=self.downsample_factor,
-        )
-        self.L_max = int(L_max) if L_max is not None else compute_Lmax(self.cycles)
+        self.processed_path = prepare_data(h5_path, config)
+        h5_split = 'test' if split == 'test' else 'dev'
+        with h5py.File(self.processed_path, 'r') as source:
+            self.L_max = int(source.attrs['L_max'])
+            group = source[h5_split]
+            keys = [tuple(map(int, key)) for key in group['keys'][()]]
+            unit_ids = sorted({unit for unit, _ in keys})
+            if split == 'test':
+                indices = list(range(len(keys)))
+            else:
+                selected_units = self._split_units(unit_ids, val_fraction, random_seed)[split]
+                indices = [index for index, (unit, _) in enumerate(keys) if unit in selected_units]
+            self.samples = [keys[index] for index in indices]
+            self.x = torch.from_numpy(group['x'][indices])
+            self.mask = torch.from_numpy(group['mask'][indices])
+            self.u = torch.from_numpy(group['u'][indices])
+            self.W_seq = torch.from_numpy(group['W_seq'][indices])
+            self.rul = pd.DataFrame(group['keys'][()], columns=['unit', 'cycle'])
+            self.rul['rul'] = group['rul'][()]
+            expected = len(self.samples)
+            if (self.x.ndim != 3 or self.x.shape[:2] != (expected, self.L_max)
+                    or self.W_seq.shape != (expected, self.L_max, 4)
+                    or self.mask.shape != (expected, self.L_max)
+                    or self.u.shape != (expected, 8 + int(config['n_fc']))
+                    or self.x.dtype != torch.float32 or self.W_seq.dtype != torch.float32
+                    or self.u.dtype != torch.float32 or self.mask.dtype != torch.bool):
+                raise ValueError(f'invalid tensor shapes/dtypes in {self.processed_path}')
 
         if cycle_hi_path is None:
             self.has_hi = False
@@ -81,45 +82,12 @@ class NCMAPSSDataset(Dataset):
             cycle_hi_df = pd.read_hdf(cycle_hi_path, key="df")
             self.hi_lookup = self._build_hi_lookup(cycle_hi_df)
 
-        unit_ids = sorted({unit_id for unit_id, _ in self.cycles})
-        if self.split == "test":
-            self.samples = sorted(self.cycles)
-        else:
-            split_units = self._split_units(unit_ids, self.val_fraction, random_seed)
-            selected_units = split_units[self.split]
-            self.samples = sorted(
-                (unit_id, cycle_id)
-                for unit_id, cycle_id in self.cycles
-                if unit_id in selected_units
-            )
         if self.has_hi:
             self._validate_hi_lookup()
-
-        if train_stats is None:
-            self.W_mean_global, self.W_std_global = compute_W_stats(self.cycles)
-            self.unit_stats = {
-                unit_id: compute_unit_stats(self.cycles, unit_id)
-                for unit_id in unit_ids
-            }
-        else:
-            self.W_mean_global = np.asarray(train_stats["W_mean_global"])
-            self.W_std_global = np.asarray(train_stats["W_std_global"])
-            self.unit_stats = {
-                int(unit_id): stats
-                for unit_id, stats in train_stats.items()
-                if unit_id not in {"W_mean_global", "W_std_global"}
-            }
 
     def __len__(self) -> int:
         """Return the number of cycle samples in this split."""
         return len(self.samples)
-
-    def get_train_stats(self) -> dict:
-        """Export normalization stats for use with test set."""
-        stats = dict(self.unit_stats)
-        stats["W_mean_global"] = self.W_mean_global
-        stats["W_std_global"] = self.W_std_global
-        return stats
 
     def __getitem__(
         self,
@@ -135,29 +103,6 @@ class NCMAPSSDataset(Dataset):
     ]:
         """Return one processed cycle and its scalar HI target or NaN."""
         unit_id, cycle_id = self.samples[idx]
-        cycle_data = self.cycles[(unit_id, cycle_id)]
-        if unit_id in self.unit_stats:
-            mean, std, valid_mask = self.unit_stats[unit_id]
-        else:
-            mean, std, valid_mask = compute_unit_stats(self.cycles, unit_id)
-            self.unit_stats[unit_id] = (mean, std, valid_mask)
-        x, W_seq, mask = process_cycle(
-            cycle_data,
-            self.L_max,
-            mean,
-            std,
-            valid_mask,
-            W_mean_global=self.W_mean_global,
-            W_std_global=self.W_std_global,
-        )
-        u = construct_u(
-            cycle_data["W"],
-            cycle_data["Fc"],
-            n_fc=self.config["n_fc"],
-            W_mean_global=self.W_mean_global,
-            W_std_global=self.W_std_global,
-        )
-
         if self.has_hi:
             hi = torch.tensor(
                 self.hi_lookup[(unit_id, cycle_id)],
@@ -167,10 +112,10 @@ class NCMAPSSDataset(Dataset):
             hi = torch.tensor(float("nan"), dtype=torch.float32)
 
         return (
-            x,
-            mask,
-            u,
-            W_seq,
+            self.x[idx],
+            self.mask[idx],
+            self.u[idx],
+            self.W_seq[idx],
             torch.tensor(unit_id, dtype=torch.int64),
             torch.tensor(cycle_id, dtype=torch.int64),
             hi,
@@ -225,18 +170,6 @@ class NCMAPSSDataset(Dataset):
                     "cycle_hi_path has no HI for "
                     f"unit {unit_id}, cycle {cycle_id}"
                 )
-
-
-def _get_config_int(config: dict, key: str) -> int:
-    """Read an integer dataset config value."""
-    if key not in config:
-        raise ValueError(f"config must include {key!r}")
-
-    value = config[key]
-    if not isinstance(value, (int, np.integer)):
-        raise ValueError(f"config[{key!r}] must be an integer")
-
-    return int(value)
 
 
 class UnitStratifiedSampler(Sampler[list[int]]):
