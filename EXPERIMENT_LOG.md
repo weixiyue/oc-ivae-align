@@ -216,3 +216,21 @@
 | mi | 0.727703291 | 0.737175284 |
 
 **Notes**: Protocol `unsupervisedhi-ncmapss-v1`, reference commit `157ebfae7baeee1e0cd52180f8e58ead3dcb448e`; all-dev scaler (663 flights), MI seed 42. Raw scores unchanged bit-for-bit. Per-unit input normalization remains unchanged. FC replaces old prognosability. Differences from previous scores reflect evaluation changes, not model improvement. Output: `runs/exp_tuning_mono_weight/evaluation_unsupervisedhi_v1_20261014_verified`. Validation/limits: `docs/EVALUATION_VERIFICATION.md`.
+
+## [2026-10-14] decoder W-summary single-factor paired ablation
+
+**Config**: `configs/exp_tuning_mono_weight_w_summary_seed42.yaml` / `configs/exp_tuning_mono_weight_no_w_summary_seed42.yaml`
+**Git tag**: N/A (local code commit only)
+**Dataset**: DS03
+**Type**: Full Model / Ablation (seed-42 paired initialization; 100 epochs each)
+
+| Metric | Dev true | Dev false | Test true | Test false |
+|---|---:|---:|---:|---:|
+| mae | 0.076172616 | 0.066921154 | 0.066169863 | 0.058134065 |
+| mape | 21.213460902 | 20.540014224 | 24.555696595 | 24.216003800 |
+| monotonicity | 0.152646314 | 0.147190170 | 0.174392708 | 0.199358021 |
+| trendability | 0.921813143 | 0.928074947 | 0.925684550 | 0.933264489 |
+| fc | 0.831925500 | 0.828742253 | 0.908185653 | 0.909809383 |
+| mi | 0.710474693 | 0.721305980 | 0.721354326 | 0.735425004 |
+
+**Notes**: Historical checkpoint initialization cannot be verified, so two new runs were used; selected epochs true=82, false=84. Initialization and actual 100-epoch batch/RNG/LR traces match. False improves all six test metrics; dev monotonicity/FC slightly decrease. Curves mostly overlap, test average absolute difference=0.014187. The current pair does not support direct decoder W-summary as the necessary source of HI performance; no claim about all model advantages or physical disentanglement. Formal output/validation: `runs/w_summary_ablation_seed42_20261014/EXPERIMENT_REPORT.md`. No extra seeds, structures or test-driven changes; legacy checkpoint/results preserved.
