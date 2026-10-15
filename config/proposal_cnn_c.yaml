@@ -1,0 +1,59 @@
+model_type: proposal_cnn
+source:
+  repository: https://github.com/KBaja/UnsupervisedHI
+  commit: 157ebfae7baeee1e0cd52180f8e58ead3dcb448e
+  files:
+  - CMAPSS/03_train_evaluate_proposals.ipynb
+  - CMAPSS/eval_utils.py
+  adaptation: PyTorch; OC-iVAE data protocol; source training signature comma corrected;
+    shared evaluation
+data:
+  h5_path: data/raw/N-CMAPSS_DS03-012.h5
+  downsample_factor: 10
+  sensor_threshold: 0.001
+  n_fc: 3
+  val_split: 0.2
+model:
+  in_features: 14
+  condition_dim: 4
+  window_size: null
+  channels:
+  - 128
+  - 64
+  - 32
+  - 16
+  kernel_size: 85
+  stride: 1
+  padding: same
+  activation: relu
+  z_dim: 1
+  flatten_order: time_then_channels
+  initialization: glorot_uniform_zero_bias_after_pytorch_module_creation
+training:
+  seed: 42
+  split_seed: 42
+  optimizer: keras_adam
+  learning_rate: 0.0001
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1.0e-07
+  epsilon_convention: epsilon_hat_after_uncorrected_sqrt_v
+  weight_decay: 0.0
+  amsgrad: false
+  batch_size: 20
+  epochs: 50
+  checkpoint_selection: last_epoch
+  gradient_clip_norm: null
+  loss_reduction: mean_absolute_error_all_batch_time_features_including_padding
+  correlation_weight: 1.0
+  mae_weight: 1.0
+  correlation: batch_pearson_Z_cycle_no_epsilon
+  sampling: sequential_batches_then_shuffle_batches
+  seed_note: source notebook leaves seed unspecified; this adaptation explicitly uses
+    seed 42
+smoke:
+  epochs: 1
+  max_batches_per_epoch: 1
+evaluation:
+  batch_size: 20

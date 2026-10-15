@@ -238,3 +238,89 @@ class UnitStratifiedSampler(Sampler[list[int]]):
         if 0 < len(self.unit_ids) < self.k:
             return 1
         return len(self.unit_ids) // self.k
+
+
+def valid_pair_pools(units: torch.Tensor, cycles: torch.Tensor, min_cycle_gap: int) -> list:
+    """OCALD source rule: all eligible ordered flight pairs within each unit."""
+    if min_cycle_gap <= 0:
+        raise ValueError('min_cycle_gap must be positive')
+    pools = []
+    for unit in torch.unique(units):
+        indices = torch.where(units == unit)[0]
+        indices = indices[torch.argsort(cycles[indices])]
+        ordered_cycles = cycles[indices]
+        if torch.unique(ordered_cycles).numel() != len(indices):
+            raise ValueError(f'duplicate cycle keys for unit {unit.item()}')
+        offsets = torch.nonzero(ordered_cycles[None, :] - ordered_cycles[:, None] >= min_cycle_gap)
+        if len(offsets):
+            pools.append((unit, indices[offsets]))
+    if not pools:
+        raise ValueError(f'no same-unit pairs with cycle gap >= {min_cycle_gap}')
+    return pools
+
+
+def sample_pairs(pools: list, count: int) -> torch.Tensor:
+    """OCALD: uniform eligible unit, then uniform whole valid pair."""
+    if not pools or count <= 0:
+        raise ValueError('pair sampling requires nonempty pools and positive count')
+    device = pools[0][1].device
+    chosen_units = torch.randint(len(pools), (count,), device=device)
+    pairs = torch.empty(count, 2, dtype=torch.int64, device=device)
+    for index, (_, candidates) in enumerate(pools):
+        slots = torch.where(chosen_units == index)[0]
+        draws = torch.randint(len(candidates), (len(slots),), device=device)
+        pairs[slots] = candidates[draws]
+    return pairs
+
+
+def ocald_joint_schedule(samples: list[tuple[int, int]], epochs: int,
+                          batches: int, seed: int) -> dict[str, torch.Tensor]:
+    """Source grouped schedule: 4 units x 4 flights, 16 eligible pairs per batch.
+
+    CPU flight selection and pair draws have independent seed-initialized RNGs,
+    isolated from model initialization and reparameterization noise.
+    """
+    units = torch.tensor([unit for unit, _ in samples])
+    cycles = torch.tensor([cycle for _, cycle in samples])
+    groups = [torch.where(units == unit)[0] for unit in torch.unique(units)]
+    if len(groups) < 4 or any(len(g) < 4 or cycles[g].max() - cycles[g].min() < 5 for g in groups):
+        raise ValueError('OCALD grouped sampling requires >=4 units, >=4 flights/unit and valid gaps')
+    flight_rng = torch.Generator().manual_seed(seed)
+    batch_list, pair_list = [], []
+    with torch.random.fork_rng(devices=[]):
+        torch.random.default_generator.manual_seed(seed)
+        for _ in range(epochs * batches):
+            selections = []
+            for group_index in torch.randperm(len(groups), generator=flight_rng)[:4]:
+                group = groups[int(group_index)]
+                while True:
+                    selected = group[torch.randperm(len(group), generator=flight_rng)[:4]]
+                    if cycles[selected].max() - cycles[selected].min() >= 5:
+                        selections.append(selected)
+                        break
+            indices = torch.cat(selections)
+            pairs = sample_pairs(valid_pair_pools(units[indices], cycles[indices], 5), 16)
+            batch_list.append(indices)
+            pair_list.append(pairs)
+    return dict(flights=torch.stack(batch_list).reshape(epochs, batches, 16),
+                pairs=torch.stack(pair_list).reshape(epochs, batches, 16, 2))
+
+
+class ShuffledSequentialBatches(Sampler[list[int]]):
+    """Proposal-C: form consecutive batches first, shuffle only batch order."""
+    def __init__(self, size: int, batch_size: int, seed: int):
+        if size < 1 or batch_size < 1:
+            raise ValueError('batch sampling requires positive sizes')
+        self.batches = [list(range(start, min(start + batch_size, size)))
+                        for start in range(0, size, batch_size)]
+        self.seed = seed
+        self.epoch = 0
+
+    def __iter__(self) -> Iterator[list[int]]:
+        generator = torch.Generator().manual_seed(self.seed + self.epoch)
+        self.epoch += 1
+        for index in torch.randperm(len(self.batches), generator=generator).tolist():
+            yield self.batches[index]
+
+    def __len__(self) -> int:
+        return len(self.batches)

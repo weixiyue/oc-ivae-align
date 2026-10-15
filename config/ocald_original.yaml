@@ -1,0 +1,90 @@
+model_type: ocald
+source:
+  repository: https://github.com/weixiyue/kgld
+  commit: 4f9e53cd3623b5cf0311d594fd7efcd4bec88206
+  files:
+  - model.py
+  - losses.py
+  - train.py
+  - configs/ocald_original.yaml
+  adaptation: OC-iVAE data protocol; valid-prefix packed GRU; shared six-metric evaluation
+data:
+  h5_path: data/raw/N-CMAPSS_DS03-012.h5
+  downsample_factor: 10
+  sensor_threshold: 0.001
+  n_fc: 3
+  val_split: 0.2
+model:
+  sensor_hidden_dim: 64
+  condition_hidden_dim: 32
+  gru_layers: 1
+  bidirectional: false
+  latent_i_dim: 8
+  latent_c_dim: 8
+  decoder_hidden_dims:
+  - 64
+  - 64
+  hi_hidden_dim: 16
+  in_features: 14
+  condition_dim: 4
+  decoder_use_w: false
+training:
+  seed: 42
+  device: auto
+  representation:
+    optimizer: Adam
+    learning_rate: 0.001
+    weight_decay: 0.0
+    batch_size: 16
+    epochs: 100
+    sigma_x_squared: 1.0
+    gradient_clip_norm: 5.0
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    min_cycle_gap: 5
+    kappa: 1.0
+    sampling: shuffle_flights
+    loss_weights:
+      reconstruction: 1.0
+      kl_i: 1.0
+      kl_c: 1.0
+      order: 0.0
+      l2: 0.0
+    loss_reduction: flight_sum_gaussian_and_latent_sum_kl_then_batch_mean; order_pair_mean;
+      head_l2_all_parameters
+  hi:
+    optimizer: Adam
+    learning_rate: 0.001
+    weight_decay: 0.0
+    batch_size_pairs: 128
+    epochs: 100
+    min_cycle_gap: 5
+    kappa: 1.0
+    include_bias_in_l2: true
+    sampling: uniform_unit_then_uniform_valid_pair
+    pairs_per_epoch: N_train
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    gradient_clip_norm: null
+    loss_weights:
+      reconstruction: 0.0
+      kl_i: 0.0
+      kl_c: 0.0
+      order: 1.0
+      l2: 0.0001
+    loss_reduction: flight_sum_gaussian_and_latent_sum_kl_then_batch_mean; order_pair_mean;
+      head_l2_all_parameters
+  checkpoint_selection: last_epoch
+  pipeline: two_stage
+  split_seed: 42
+  initialization: pytorch_defaults_source_module_order; isolated_decoder_w_resize
+smoke:
+  epochs: 1
+  max_batches_per_epoch: 1
+  flights_per_unit: 8
+evaluation:
+  batch_size: 16

@@ -1,21 +1,31 @@
-"""Explicit selection of the three existing model variants."""
+"""Explicit model selection for training interfaces and the shared evaluator."""
 from __future__ import annotations
 
 from typing import Any
+from torch import nn
 
 from models.oc_ivae import OC_iVAE
+from models.ocald import OCALD
+from models.proposal_cnn import ProposalCNN
 from models.vae import build_cvae_model, build_vae_model
 
 
-def build_model(raw_config: dict[str, Any], model_config: dict[str, Any]) -> OC_iVAE:
-    """Build the configured OC-iVAE, cVAE or VAE variant.
+def build_model(raw_config: dict[str, Any], model_config: dict[str, Any]) -> nn.Module:
+    """Build one explicitly supported model without imposing a common forward tuple.
 
     Args:
         raw_config: Nested experiment configuration with optional baseline_type.
         model_config: Model dimensions and decoder conditioning settings.
     Returns:
-        A model with the common twelve-field forward output.
+        Model with its own forward interface.
     """
+    model_type = raw_config.get('model_type', 'oc_ivae')
+    if model_type == 'ocald':
+        return OCALD(model_config)
+    if model_type == 'proposal_cnn':
+        return ProposalCNN(model_config)
+    if model_type != 'oc_ivae':
+        raise ValueError(f'unknown model_type: {model_type}')
     baseline_type = raw_config.get("experiment", {}).get("baseline_type") or None
     if baseline_type is None:
         return OC_iVAE(model_config)

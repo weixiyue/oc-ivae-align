@@ -1,7 +1,8 @@
 # OC-iVAE
 
-使用 PyTorch 在 N-CMAPSS 上构建无 HI 标签监督的健康指标，提供 OC-iVAE、cVAE 和 VAE 对比模型。
-训练统一使用 `train.py`，评估统一使用 `evaluate.py`；实验调度放在 `experiments/`。
+使用 PyTorch 在 N-CMAPSS 上构建无 HI/RUL 标签监督的健康指标，提供 OC-iVAE、cVAE、VAE，
+以及采用 OC-iVAE 数据协议的 OCALD 和 Proposal-C CNN 适配版。
+原三模型使用 `train.py`，新模型使用独立实验入口；全部共用 `evaluate.py`。
 项目规范见 [AGENTS.md](AGENTS.md)，当前状态见 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)。
 
 ## 环境
@@ -27,13 +28,17 @@ models/
     oc_ivae.py                 # 模型装配、分支、FiLM、conditional prior、HI head
     tcn.py                     # causal encoder 与 non-causal decoder
     vae.py                     # 两个已有 baseline 的差异组件
+    ocald.py                   # 原 8D I/C OCALD、padding 适配及模型专属损失
+    proposal_cnn.py            # Proposal-C CNN 与 batch Pearson 约束
     __init__.py                # 显式模型选择
 utils/
     preprocess.py             # N-CMAPSS 数据处理
     losses.py                 # 重构、KL、HSIC、ranking、soft Spearman
     metrics.py                # 独立指标公式
+    experiment.py             # 新实验共用的配置快照、history 与 checkpoint 保存
 config/                       # 全部独立实验 YAML
-experiments/                  # 配对实验调度与比较
+experiments/                  # 两个独立新模型训练入口及 W-summary 配对实验
+tests/                        # 模型数学、采样、重载与端到端合成 smoke
 data/raw/                     # 原有符号链接
 data/processed/               # 可复用的预处理 HDF5，Git 忽略
 runs/                         # 新运行配置、checkpoint、history 和评估结果
@@ -122,6 +127,56 @@ python -m experiments.run_w_summary_ablation --help
 不要求新模型伪造 OC-iVAE 的 12 个字段，不提前引入 registry 或通用 Trainer。
 批量脚本只调度、审计和汇总，不复制训练循环与指标计算。
 
+## OCALD 与 Proposal-C
+
+两者均直接复用公共 Dataset/预处理缓存、seed=42 的 train/val 设备划分和完整 dev/test 评价，
+不使用 HI/RUL 训练或选模；不是源仓库的数据协议或完整实验复现。
+
+| 配置 | 训练方式与保留项 |
+| --- | --- |
+| [ocald_original](config/ocald_original.yaml) | 表示 100 轮后冻结，只训练 HIHead 100 轮；I/C 各 8 维 |
+| [ocald_joint](config/ocald_joint.yaml) | 联合 100 轮；KL 各 1、排序 10、头部 L2=1e-4 |
+| [ocald_joint_decoder_w](config/ocald_joint_decoder_w.yaml) | 同上，显式开启 decoder W 输入 |
+| [proposal_cnn_c](config/proposal_cnn_c.yaml) | CNN + batch Pearson C；Adam 1e-4、batch 20、50 轮 |
+
+实际迁移来源固定为 [kgld 4f9e53cd3623b5cf0311d594fd7efcd4bec88206](https://github.com/weixiyue/kgld/tree/4f9e53cd3623b5cf0311d594fd7efcd4bec88206)
+的 model.py、losses.py、train.py 与对应三份配置，以及
+[UnsupervisedHI 157ebfae7baeee1e0cd52180f8e58ead3dcb448e](https://github.com/KBaja/UnsupervisedHI/tree/157ebfae7baeee1e0cd52180f8e58ead3dcb448e)
+的 CMAPSS/03_train_evaluate_proposals.ipynb、CMAPSS/eval_utils.py；每份 YAML 记录完整 commit 和文件。
+
+OCALD 仅把有效 X/W 按原序移到前端、右补零，再送入 packed GRU；训练和推理共用该适配。
+高斯重构按 flight 求和、KL 按维求和后取 batch 均值，排序仍为鼓励 score 随周期增加的 softplus。
+保留源 Adam 1e-3、裁剪 5（HI 阶段不裁剪）、原均匀设备/配对及联合 4x4 分组采样。
+默认 decoder 不读取 W；conditional prior 仍读取 W。公共评价才取 `-score(mu_I)`，训练不改符号。
+
+Proposal-C 保留通道 [128,64,32,16]、kernel 85、same/ReLU，按 Keras 时间优先顺序 Flatten 得到 Z，
+重复 Z 拼接逐时刻 W，再用反向通道序列卷积及逐时刻 Dense 输出 14 维。
+平均 MAE 包含公共补零位置；C 是整个 batch 的 Pearson(Z, cycle)，权重 1，最小化鼓励负相关。
+先顺序组 batch 再 shuffle batch，最后不足一个 batch 也保留；零方差导致非有限 C 时明确报错。
+使用 Glorot uniform/零偏置；Keras Adam 显式 beta=(0.9,0.999)、epsilon=1e-7（uncorrected sqrt(v) 后的 epsilon-hat）。
+源 Notebook 未指定 seed，此适配显式用 42；PyTorch RNG/浮点实现不保证与 TensorFlow 逐位相同。
+源 eval_utils.py 的函数签名缺逗号，只迁移已核对算法，不复制其训练/评价工具。
+
+```bash
+python -m experiments.train_ocald --config config/ocald_original.yaml \
+  --run-dir runs/ocald_original_seed42 --device cpu --threads 2
+python -m experiments.train_ocald --config config/ocald_joint.yaml \
+  --run-dir runs/ocald_joint_seed42 --device cpu --threads 2
+python -m experiments.train_ocald --config config/ocald_joint_decoder_w.yaml \
+  --run-dir runs/ocald_joint_decoder_w_seed42 --device cpu --threads 2
+python -m experiments.train_proposal_cnn --config config/proposal_cnn_c.yaml \
+  --run-dir runs/proposal_cnn_c_seed42 --device cpu --threads 2
+python evaluate.py --config runs/proposal_cnn_c_seed42/config.yaml \
+  --output-dir runs/proposal_cnn_c_seed42/reevaluation --device cpu --threads 2
+```
+
+新入口默认 CPU，可显式选择 cuda；每次必须使用新目录。加 `--smoke` 后每阶段 1 轮、最多 1 次更新，
+OCALD 仅取各训练设备前 8 个 flight；公共 scaler 和六指标始终使用完整 dev/test，不缩小评价集合。
+新模型按最后轮保存 `best.pt`，元数据 selection=last_epoch；两阶段另存 `representation.pt`。
+checkpoint 包含模型类型、阶段、完整实际配置、seed 和预处理出处。
+重评使用运行快照，结构/数据不一致的外部配置会报错，其余设置优先使用 checkpoint 保存配置。
+每轮 history 记录真实损失项、权重、优化步数、抽取样本数和耗时；CNN 不记录伪造的 KL/HSIC。
+
 既有 W-summary 配对实验命令：
 
 ```bash
@@ -164,7 +219,8 @@ runs/<experiment_name>/
 头部 padding 和保留 tail 的截断。W 全局归一化后分别构造完整 cycle 的 u 和模型 W_seq；
 不改变先验、FiLM 或 decoder 的条件路径。未见 test unit 的传感器统计按现有实现单独计算。
 
-协议 `unsupervisedhi-ncmapss-v1`：posterior mean → 线性 raw HI → 按真实 flight 键关联。
+协议 `unsupervisedhi-ncmapss-v1` 按真实 flight 键关联分数：OC-iVAE 保持 posterior mean 的线性 raw HI，
+OCALD 使用 -score(mu_I)，Proposal-C 使用 Z。
 仅在全部 dev 分数上拟合全局 MinMaxScaler，再 transform dev/test；
 不逐机缩放、不 EWMA、不裁剪。test HI 可以超出 `[0, 1]`。
 六项指标为 MAE、MAPE、Monotonicity、Trendability、FC、MI；MI random_state=42。
@@ -177,7 +233,7 @@ runs/<experiment_name>/
 普通训练和独立评估仍生成 dev/test 曲线；独立评估只保存评估结果及曲线。
 归一化参数保存在 `metrics.json` 的 `metadata.scaling`，完整评估出处和配置保存在 `metadata`，
 不再额外生成 `scaler.json` 或 `evaluation_config.yaml`。已有运行文件保持原样。
-snapshot 记录实际维度、路径、源配置、已知 seed、初始权重/RNG hash、设备和线程。
+OC-iVAE snapshot 记录实际维度、路径、源配置、已知 seed、初始权重/RNG hash、设备和线程。
 普通入口保留原未固定初始化 seed 的行为：实际 seed 未指定时记录 null，
 YAML 中的 configured_seed 单独记录；配对脚本明确设置 seed=42。
 hash 是审计依据，不等同于保存完整初始化/RNG 状态。
@@ -188,7 +244,19 @@ checkpoint 保存 state_dict 字典。新文件保留已有参数 keys 和保存
 
 ## 验证与文档
 
-按用户批准已删除整个 tests/，没有保留 pytest 运行入口；删除前最后一次为 15 passed。
+旧 tests/ 已在此前清理中删除；本次按迁移验证要求新增永久 unittest 测试：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
+```
+
+本次 8 项测试通过，包含四份配置的 CPU CLI smoke、保存重载、冻结/联合梯度、
+卷积/Flatten/损失及 Adam 独立公式对照、完整 dev 缩放与六指标/CSV 检查。
+smoke 在测试创建的合成数据上自动加 --smoke 执行两个入口；临时配置、数据、权重和输出由 TemporaryDirectory 清理。
+另对照固定 kgld commit：三份 OCALD 的初始化、随机前向、损失、参数梯度及联合配对序列完全一致；
+旧 OC-iVAE checkpoint 的真实 DS03 1101 个周期分数、完整 metrics 和曲线与修改前一致。
+没有 TensorFlow 环境或源 CNN 权重，未做跨框架逐位复现，也未执行完整 50/100 轮训练或 GPU 验证。
+
 W-summary 配对脚本在运行时检查配置、共享初始权重和共同训练 epochs 的 batch/RNG/学习率摘要，
 摘要保存在 history 和配置中。不再提供独立 verify 命令，也不依赖旧 Git revision 或历史 checkpoint。
 历史审计报告保留原有记录；新实验不生成额外的历史对照或验证目录。

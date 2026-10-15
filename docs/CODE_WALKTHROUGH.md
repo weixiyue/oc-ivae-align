@@ -13,7 +13,10 @@
 | models/tcn.py | causal encoder、masked LayerNorm、non-causal decoder、W summary |
 | models/oc_ivae.py | OC-iVAE 装配、两个 posterior、FiLM、conditional prior、HI head |
 | models/vae.py | 标准正态先验与两个 baseline 的组件替换 |
-| models/__init__.py | build_model 的三个显式条件分支 |
+| models/__init__.py | 原三模型及 OCALD/Proposal-C 的显式构建分支 |
+| models/ocald.py | 有效前缀适配、原 GRU/MLP/HIHead、flight 求和 ELBO/排序/L2 |
+| models/proposal_cnn.py | 时间优先 Flatten 的 Proposal-C、unmasked MAE 和 batch Pearson |
+| utils/experiment.py | 新模型实际配置快照、history、完整 checkpoint 保存 |
 | utils/losses.py | 单项数学损失、三阶段聚合及 KL annealing |
 | train.py | 训练/验证、AdamW/LR、best selection、checkpoint、history/审计 |
 | evaluate.py | 推理、flight 关联、dev-only scaler、评估和导出 |
@@ -114,6 +117,16 @@ run_evaluation() 默认生成 dev/test 曲线；配对脚本传入 save_plots=Fa
 不再单独输出 scaler.json 和 evaluation_config.yaml，历史文件原地保留。
 匹配的新训练目录可接受第一次评估，重复评估必须用新目录。
 历史 per-unit/EWMA 工具已删除，相关历史报告和结果未删除。
+
+## 两个迁移模型入口
+
+experiments.train_ocald 保留独立两阶段与联合流程，experiments.train_proposal_cnn 保留独立 CNN 目标；
+不经过原 train_model 的 OC-iVAE loss、scheduler、分层 sampler 或验证重构选模。
+Dataset 的数据缓存和 unit split 共用，OCALD 仅重排左右 padding，CNN 原样读取固定长度 X/W。
+评价 predict_cycles 按具体模型提取 -score(mu_I)、Z 或原 hi_raw，不要求伪造统一 forward 字段。
+新 checkpoint 保存完整实际配置，评价拒绝外部结构/数据冲突并核对预处理文件来源；
+旧 state_dict checkpoint 仍走原加载规则，W-summary 校验只对原三模型生效。
+源 commit、默认预算、初始化/Adam 约定和 smoke 命令均见 README。
 
 ## 版本证据
 

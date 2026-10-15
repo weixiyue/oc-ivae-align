@@ -20,7 +20,8 @@ from torch.utils.data import DataLoader
 
 from dataset import NCMAPSSDataset
 from models import build_model
-from models.oc_ivae import OC_iVAE
+from models.ocald import OCALD
+from models.proposal_cnn import ProposalCNN
 from models.tcn import W_SUMMARY_DIM
 from utils.metrics import evaluate_all
 
@@ -54,18 +55,42 @@ def run_evaluation(
     data_config = raw.get('data')
     if not isinstance(data_config, dict):
         raise ValueError("config must include section 'data'")
-    flat = {
-        key: value
-        for section in raw.values() if isinstance(section, dict)
-        for key, value in section.items()
-    }
-    flat.setdefault('w_summary_dim', W_SUMMARY_DIM)
+    requested = raw
     exp_name = Path(config_path).stem
     run_dir = Path(raw.get('run_dir', Path('runs') / exp_name))
     checkpoint_path = checkpoint_path or str(run_dir / 'best.pt')
     checkpoint_file = Path(checkpoint_path)
     if not checkpoint_file.is_file():
         raise FileNotFoundError(checkpoint_path)
+    device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+    checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
+    saved = checkpoint.get('config')
+    if saved is not None:
+        # New checkpoints carry the complete actual settings. External YAML must
+        # agree at model/data boundaries; all other settings come from the save.
+        if requested.get('model_type', 'oc_ivae') != checkpoint['model_type']:
+            raise ValueError('external model_type differs from saved checkpoint')
+        if requested['model'] != saved['model']:
+            raise ValueError('external model structure differs; use the saved run/config.yaml')
+        def canonical_data(data: dict) -> dict:
+            values = dict(data)
+            for key in ('h5_path', 'cycle_hi_path', 'test_cycle_hi_path', 'processed_dir'):
+                if values.get(key) is not None:
+                    values[key] = str(Path(values[key]).resolve())
+            return values
+        if canonical_data(requested['data']) != canonical_data(saved['data']):
+            raise ValueError('external preprocessing/data settings differ from saved checkpoint')
+        raw = saved
+        data_config = raw['data']
+        if checkpoint['model_type'] == 'ocald' and checkpoint['stage'] == 'representation':
+            raise ValueError('representation checkpoint has no trained HIHead; evaluate best.pt')
+    model_type = raw.get('model_type', 'oc_ivae')
+    flat = {
+        key: value
+        for section in raw.values() if isinstance(section, dict)
+        for key, value in section.items()
+    }
+    flat.setdefault('w_summary_dim', W_SUMMARY_DIM)
     existing_run = output_dir is not None and Path(output_dir).exists()
     if existing_run:
         destination = Path(output_dir)
@@ -77,18 +102,24 @@ def run_evaluation(
                 or any((destination / name).exists() for name in artifacts)):
             raise FileExistsError(f'evaluation directory already exists: {output_dir}')
     h5_path = _resolve_main_h5_path(data_config)
-    device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
     # No held-out dev units during evaluation; labels are associated separately.
     dev_dataset = NCMAPSSDataset(h5_path, None, flat, split='train', val_fraction=0.0)
-    flat['in_features'] = int(dev_dataset[0][0].shape[-1])
+    in_features = int(dev_dataset[0][0].shape[-1])
+    if model_type != 'oc_ivae':
+        if in_features != raw['model']['in_features']:
+            raise ValueError('checkpoint feature dimension differs from prepared data')
+        if saved is not None and str(dev_dataset.processed_path) != checkpoint['processed_data']:
+            raise ValueError('checkpoint preprocessing source differs from current prepared data')
+        if model_type == 'proposal_cnn' and dev_dataset.L_max != raw['model']['window_size']:
+            raise ValueError('checkpoint window_size differs from prepared L_max')
+    flat['in_features'] = in_features
     test_dataset = NCMAPSSDataset(
         h5_path, None, flat, split='test',
     )
     model = build_model(raw, flat)
-    checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
     saved_switch = checkpoint.get('decoder_use_W_summary', True)
     configured_switch = flat.get('decoder_use_W_summary', True)
-    if saved_switch != configured_switch:
+    if model_type == 'oc_ivae' and saved_switch != configured_switch:
         raise ValueError('checkpoint decoder_use_W_summary does not match evaluation config')
     model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
     frames: dict[str, pd.DataFrame] = {}
@@ -97,7 +128,8 @@ def run_evaluation(
         rul = dataset.rul
         path = _resolve_cycle_hi_path(flat, h5_path, split)
         ref, provenance = read_reference(path, rul)
-        frames[split] = associate(predict_cycles(model, dataset, device=device), rul, ref)
+        frames[split] = associate(predict_cycles(
+            model, dataset, device=device, batch_size=raw.get('evaluation', {}).get('batch_size', 64)), rul, ref)
         reference_meta[split] = dict(
             path=path, key_provenance=provenance,
             original_Y_constant_within_flight=True,
@@ -159,6 +191,12 @@ def run_evaluation(
         ignored_legacy_config={'postprocess': raw.get('postprocess')},
         config=raw, resolved_model_data_config=flat, resolved_h5_path=h5_path,
     )
+    if model_type != 'oc_ivae':
+        metadata.pop('decoder_use_W_summary')
+        metadata.update(model_type=model_type, source=raw['source'],
+                        score='-score(mu_I), deterministic posterior mean' if model_type == 'ocald'
+                        else 'Proposal-C scalar Z, no sign conversion',
+                        selection=checkpoint['selection'], stage=checkpoint['stage'])
     predictions = pd.concat([dev, test], ignore_index=True)
     predictions[['split', 'unit', 'cycle', 'score', 'hi', 'hi_gt', 'rul']].to_csv(
         destination / 'scores.csv', index=False,
@@ -181,9 +219,10 @@ def run_evaluation(
 
 
 def predict_cycles(
-    model: OC_iVAE,
+    model: torch.nn.Module,
     dataset: NCMAPSSDataset,
     device: str = 'cpu',
+    batch_size: int = 64,
 ) -> pd.DataFrame:
     """Collect deterministic posterior-mean scores keyed by unit and cycle.
 
@@ -191,18 +230,25 @@ def predict_cycles(
         model: Trained OC-iVAE or an existing baseline.
         dataset: Dataset providing the seven-field cycle samples.
         device: Inference device.
+        batch_size: Inference batch size; never changes the evaluated flight set.
     Returns:
         Sorted unit/cycle/score rows; reference labels are read separately.
     """
     model.to(torch.device(device))
     model.eval()
-    loader = DataLoader(dataset, batch_size=64, shuffle=False)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     rows: list[tuple[int, int, float]] = []
     with torch.no_grad():
         for x, mask, u, W_seq, unit_id, cycle_id, _ in loader:
-            out = model(x.to(device), mask.to(device), u.to(device), W_seq.to(device))
-            rows.extend(zip(unit_id.tolist(), cycle_id.tolist(),
-                            out['hi_raw'].cpu().tolist(), strict=True))
+            if isinstance(model, OCALD):
+                scores = model.health_score(x.to(device), W_seq.to(device), mask.to(device))
+            elif isinstance(model, ProposalCNN):
+                scores = model.encode(x.to(device))
+            else:
+                scores = model(x.to(device), mask.to(device), u.to(device), W_seq.to(device))['hi_raw']
+            if not torch.isfinite(scores).all():
+                raise FloatingPointError('nonfinite model scores')
+            rows.extend(zip(unit_id.tolist(), cycle_id.tolist(), scores.cpu().tolist(), strict=True))
     return pd.DataFrame(rows, columns=['unit', 'cycle', 'score']).sort_values(
         ['unit', 'cycle']).reset_index(drop=True)
 

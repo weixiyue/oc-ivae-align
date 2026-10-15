@@ -332,6 +332,8 @@ def main() -> None:
         config = yaml.safe_load(file)
     if not isinstance(config, dict):
         raise ValueError('config file must contain a YAML mapping')
+    if config.get('model_type', 'oc_ivae') != 'oc_ivae':
+        raise ValueError('use experiments.train_ocald or experiments.train_proposal_cnn for migrated models')
     for section in ('data', 'training', 'model'):
         if not isinstance(config.get(section), dict):
             raise ValueError(f'config must include section {section!r}')

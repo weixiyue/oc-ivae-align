@@ -5,18 +5,20 @@
 
 ## 已完成的结构重构
 
-- 模型整合为四个文件，保留 OC-iVAE/cVAE/VAE 的实际计算与 checkpoint keys。
+- 原三模型的计算与 checkpoint keys 保持；新增 ocald.py/proposal_cnn.py 独立实现。
 - train.py 使用普通函数，CLI 与配对实验共用训练循环；没有 Trainer 继承层。
 - evaluate.py 直接处理 cycle 分数表，独立 metrics.py 保留六项指标公式。
 - dataset.py 合并数据加载/取样，utils/preprocess.py 保留 N-CMAPSS 处理。
-- 全部十份 YAML 位于 config/，内容不变；实验调度位于 experiments/。
+- 原十份 YAML 内容不变；config/ 新增四份完整独立配置，实验入口位于 experiments/。
 - 新运行使用独立 runs 目录，记录配置、best.pt、history、scores 和评估出处。
-- 按用户批准删除 tests/、一次性 test.py 和废弃空目录；删除前最后检查为 15 passed。
+- 此前按批准删除旧 tests/、test.py 和空目录；本次新增迁移模型的永久数学与 smoke 测试。
 
 ## 模型与实验
 
 现有三种模型均可选择：缺省为 OC-iVAE，baseline_type 为 cvae 或 vae。
-VAE 仍保留双 latent 分支及 decoder W 路径。当前未增加其他模型或消融。
+VAE 仍保留双 latent 分支及 decoder W 路径。
+新增采用公共数据协议的 OCALD 两阶段/联合/decoder W 和 Proposal-C CNN；来源 commit 及命令见 README。
+只迁入 8D I/C 原结构和 CNN C 约束，未迁入标量 I、时序 C 或 NG/F。
 各 YAML 的训练权重、预算和早停设置独立保留，没有为比较而顺便统一参数。
 
 普通入口仍不设置初始化 seed；已知 seed 与 configured_seed 分开记录。
@@ -71,3 +73,9 @@ history、最佳权重、optimizer 状态、scores、scaler、指标、对比 CS
 历史 runs/checkpoints、实验日志、源码快照和设计结论保留。
 逐步证据见 REFACTOR_STEP1.md 至 REFACTOR_STEP5.md；旧状态原文保留在
 [history/PROJECT_STATUS_pre_refactor.md](history/PROJECT_STATUS_pre_refactor.md)。
+
+本次迁移的永久测试入口为 `python -m unittest discover -s tests -v`，8 项通过，
+包含四个 CPU CLI smoke（合成数据，每阶段 1 次更新，完整 dev 缩放和评价）。
+OCALD 与固定源 commit 的前向/损失/梯度/联合采样完全一致；CNN 使用独立公式和梯度对照。
+旧 OC-iVAE 真实 DS03 的 scores、完整 metrics 和曲线均不变。所有本次临时权重、配置和输出已清理。
+无 TensorFlow/源 CNN 权重，未做跨框架逐位复现、完整预算训练或 GPU 验证。
