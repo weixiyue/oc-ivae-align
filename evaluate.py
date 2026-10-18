@@ -30,25 +30,9 @@ PROTOCOL_VERSION = 'unsupervisedhi-ncmapss-v1'
 REFERENCE_COMMIT = '157ebfae7baeee1e0cd52180f8e58ead3dcb448e'
 
 
-def run_evaluation(
-    config_path: str,
-    checkpoint_path: str | None = None,
-    output_dir: str | None = None,
-    device: str | None = None,
-    *,
-    save_plots: bool = True,
-) -> Path:
-    """Evaluate all dev/test flights with one dev-only scaler and save an isolated run.
-
-    Args:
-        config_path: Original experiment YAML, including original train/val fraction.
-        checkpoint_path: Old model-state checkpoint or bare state dictionary.
-        output_dir: New directory, or the matching training run awaiting its first evaluation.
-        device: Optional inference device; otherwise select available CUDA or CPU.
-        save_plots: Save per-split HI curves; paired experiments draw combined curves.
-    Returns:
-        Evaluation directory with scores, metrics (including scaler/provenance), and optional curves.
-    """
+def read_evaluation_checkpoint(config_path: str, checkpoint_path: str | None = None,
+                               device: str | None = None) -> tuple[dict, dict, dict, Path, str]:
+    """Read saved settings with the same model/data guards for all evaluation tasks."""
     with open(config_path, encoding='utf-8') as file:
         raw = yaml.safe_load(file)
     if not isinstance(raw, dict):
@@ -82,16 +66,63 @@ def run_evaluation(
         if canonical_data(requested['data']) != canonical_data(saved['data']):
             raise ValueError('external preprocessing/data settings differ from saved checkpoint')
         raw = saved
-        data_config = raw['data']
         if checkpoint['model_type'] == 'ocald' and checkpoint['stage'] == 'representation':
             raise ValueError('representation checkpoint has no trained HIHead; evaluate best.pt')
-    model_type = raw.get('model_type', 'oc_ivae')
     flat = {
         key: value
         for section in raw.values() if isinstance(section, dict)
         for key, value in section.items()
     }
     flat.setdefault('w_summary_dim', W_SUMMARY_DIM)
+    return raw, flat, checkpoint, checkpoint_file, device
+
+
+def load_evaluation_model(raw: dict, flat: dict, checkpoint: dict,
+                          dataset: NCMAPSSDataset | ShortWindowDataset) -> torch.nn.Module:
+    """Validate checkpoint/input compatibility and strictly restore network weights."""
+    model_type = raw.get('model_type', 'oc_ivae')
+    in_features = int(dataset[0][0].shape[-1])
+    if model_type != 'oc_ivae':
+        if in_features != raw['model']['in_features']:
+            raise ValueError('checkpoint feature dimension differs from prepared data')
+        if checkpoint.get('config') is not None and str(dataset.processed_path) != checkpoint['processed_data']:
+            raise ValueError('checkpoint preprocessing source differs from current prepared data')
+        if model_type == 'proposal_cnn' and dataset.L_max != raw['model']['window_size']:
+            raise ValueError('checkpoint window_size differs from prepared L_max')
+    flat['in_features'] = in_features
+    model = build_model(raw, flat)
+    saved_switch = checkpoint.get('decoder_use_W_summary', True)
+    configured_switch = flat.get('decoder_use_W_summary', True)
+    if model_type == 'oc_ivae' and saved_switch != configured_switch:
+        raise ValueError('checkpoint decoder_use_W_summary does not match evaluation config')
+    model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+    return model
+
+
+def run_evaluation(
+    config_path: str,
+    checkpoint_path: str | None = None,
+    output_dir: str | None = None,
+    device: str | None = None,
+    *,
+    save_plots: bool = True,
+) -> Path:
+    """Evaluate all dev/test flights with one dev-only scaler and save an isolated run.
+
+    Args:
+        config_path: Original experiment YAML, including original train/val fraction.
+        checkpoint_path: Old model-state checkpoint or bare state dictionary.
+        output_dir: New directory, or the matching training run awaiting its first evaluation.
+        device: Optional inference device; otherwise select available CUDA or CPU.
+        save_plots: Save per-split HI curves; paired experiments draw combined curves.
+    Returns:
+        Evaluation directory with scores, metrics (including scaler/provenance), and optional curves.
+    """
+    raw, flat, checkpoint, checkpoint_file, device = read_evaluation_checkpoint(
+        config_path, checkpoint_path, device)
+    data_config = raw['data']
+    exp_name = Path(config_path).stem
+    model_type = raw.get('model_type', 'oc_ivae')
     existing_run = output_dir is not None and Path(output_dir).exists()
     if existing_run:
         destination = Path(output_dir)
@@ -107,24 +138,9 @@ def run_evaluation(
     window_mode = model_type == 'residual' and data_config.get('input_mode') == 'short_window'
     dataset_class = ShortWindowDataset if window_mode else NCMAPSSDataset
     dev_dataset = dataset_class(h5_path, None, flat, split='train', val_fraction=0.0)
-    in_features = int(dev_dataset[0][0].shape[-1])
-    if model_type != 'oc_ivae':
-        if in_features != raw['model']['in_features']:
-            raise ValueError('checkpoint feature dimension differs from prepared data')
-        if saved is not None and str(dev_dataset.processed_path) != checkpoint['processed_data']:
-            raise ValueError('checkpoint preprocessing source differs from current prepared data')
-        if model_type == 'proposal_cnn' and dev_dataset.L_max != raw['model']['window_size']:
-            raise ValueError('checkpoint window_size differs from prepared L_max')
-    flat['in_features'] = in_features
-    test_dataset = dataset_class(
-        h5_path, None, flat, split='test',
-    )
-    model = build_model(raw, flat)
-    saved_switch = checkpoint.get('decoder_use_W_summary', True)
+    model = load_evaluation_model(raw, flat, checkpoint, dev_dataset)
+    test_dataset = dataset_class(h5_path, None, flat, split='test')
     configured_switch = flat.get('decoder_use_W_summary', True)
-    if model_type == 'oc_ivae' and saved_switch != configured_switch:
-        raise ValueError('checkpoint decoder_use_W_summary does not match evaluation config')
-    model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
     residual_state = checkpoint['residual_state'] if model_type == 'residual' else None
     if residual_state is not None:
         fit_keys = dev_dataset.flight_keys if window_mode else dev_dataset.samples

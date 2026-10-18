@@ -225,6 +225,44 @@ python evaluate.py --config runs/residual_a_short_window_seed42/config.yaml \
 history 记录健康 flight 数、候选窗口数、更新步数/累计步数、实际抽样数、MAE 及耗时。
 每次使用新目录，拒绝覆盖既有结果；旧 flight 模式按每设备前后10个 flight 定向，保持历史语义。
 
+独立线性探测入口（使用参考 HI 标签的表征评价，**不属于无监督六指标**）：
+
+```bash
+python -m experiments.evaluate_linear_probe --config runs/ds03_default/config.yaml \
+  --output-dir runs/ds03_default/linear_probe --device cuda --threads 2
+python -m experiments.evaluate_linear_probe --config runs/ocald_original/config.yaml \
+  --output-dir runs/ocald_original/linear_probe --device cuda --threads 2
+python -m experiments.evaluate_linear_probe --config runs/proposal_cnn_c/config.yaml \
+  --output-dir runs/proposal_cnn_c/linear_probe --device cuda --threads 2
+```
+
+默认读取运行快照对应的 best.pt，可用 `--checkpoint` 指定其他已确认权重；输出目录必须尚不存在。
+可用 `--device cpu`；`--batch-size` 只改变推理批量，不改变拟合/评价样本。
+支持 OC-iVAE（及相同健康分支的现有 VAE/cVAE）、OCALD、Proposal-C，不支持 Residual。
+OC-iVAE 提取 HIHead 实际使用的完整 mu_d；OCALD 复用有效前缀适配后取完整 mu_I；Proposal-C 取1维Z。
+全部 eval/no_grad 并冻结参数，不采样、不做 PCA、不微调。当前均每flight一次输出，重复键直接报错。
+未来模型可向 `utils/linear_probe.py` 的键表接口提供已按 cycle 平均的完整慢状态，不新增空模型实现。
+
+`representation` 与公共最终标量 `hi` 分别拟合独立的 sklearn `StandardScaler → LinearRegression(fit_intercept=True)`。
+只在表征训练设备拟合新增 scaler/回归器；验证设备只作诊断，测试指标按全部cycle等权合并计算。
+沿用已定的 X/W/截断/padding 和公共最终HI的全dev Min–Max；后者不是新增探测器的 scaler。
+参考HI复用 `(unit,cycle)` 标签关联；缺cycle时沿用已验证行序推定，输出记录其无法独立验证语义顺序的限制。
+训练划分优先核对 checkpoint 的 train/val units，或依据已记录 split_seed 和训练 val_split 重建；
+信息缺失时必须提供 `--split-config` YAML，且文件仅含整数列表 `fit_units`、`val_units`，不得与已记录划分冲突。
+不能按测试结果选择划分或checkpoint。当前DS03既有三个运行均核对为：fit=[1,2,3,4,5,7,8]，
+val=[6,9]，test=[10,11,12,13,14,15]，分别516/147/438个cycle；该集合不是未知旧checkpoint的默认值。
+
+输出 `probe_metrics.json`、`probe_predictions.csv`、`probe_features.csv`、`probe_parameters.json`、`config.yaml`。
+分别报告探测后representation/hi的 pooled R²、MAE、RMSE及逐设备诊断，并单列未探测hi的相同指标；
+记录特征维数、回归秩/秩亏/欠定、数值scaler/系数和fit键。常数目标或不足2个样本的R²为null并注明原因。
+预测不做Sigmoid、输出Min–Max或裁剪。Proposal-C的Z与最终HI仅有仿射差别，两类探测可重复，不去重或夸大差别。
+原 metrics.json/checkpoint 不改写。
+
+方法参考 H-CDE commit `b5cfa1e069bd824ad65fc0ad427dd0e828ebf936`：
+`src/train/task.py::get_latent_space` 的线性回归使用完整末端慢状态，PCA仅用于分析；
+`src/model/hcde.py` 返回 d_all，`src/train/train.py::MappingTrainer.compute_loss` 将其记录为latent。
+本项目只借鉴冻结表征→训练设备拟合→测试评价，改用DS03参考HI，不迁入H-CDE模型、DS01目标或其数据协议。
+
 既有 W-summary 配对实验命令：
 
 ```bash
@@ -335,6 +373,14 @@ PCA 使用完整663个 dev flight的524907个窗口，test为438个flight的4038
 独立重载参数、六指标重算和键覆盖均通过；真实样本固定权重下 batch127/512 的最终分数一致。
 保留正式变长缓存和永久测试，清理本次临时配置、权重、残差矩阵、图及下载参考文件。
 未运行完整20轮、TensorFlow/GPU对照，不将 smoke 或输入组织变化解释为性能改善。
+
+线性探测验证：18项unittest通过，新增5项覆盖完整均值/Z、无随机采样/权重更新、键覆盖、
+仅fit设备拟合、线性回归数值参数恢复、缺失划分/秩亏/未定义R²，以及三个随机权重合成CLI。
+实际DS03三个已有checkpoint还完成独立CPU探测检查（8线程、临时目录，未更新网络）：
+mu_d/μ_I/Z维数分别2/8/1，fit/val/test均为516/147/438；两类probe秩分别2/1、8/1、1/1。
+三模型公共评价修改前后，1101条flight的scores、完整metrics及两张曲线逐字节一致。
+命令为上述三个probe命令，验证时改用 `--device cpu --threads 8` 和独立 `/tmp/linear_probe_checks/` 输出；
+合成及真实检查的临时数据/权重/输出均清理。未运行网络训练或GPU验证，不将带标签的探测分数当无监督主指标。
 
 历史审计报告保留原有记录；新实验不生成额外的历史对照或验证目录。
 

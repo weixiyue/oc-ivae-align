@@ -91,3 +91,9 @@ OCALD 与固定源 commit 的前向/损失/梯度/联合采样完全一致；CNN
 13项测试通过，含八份配置 CPU smoke、源窗口对照、旧 OC-iVAE/flight A/B 真实checkpoint等价重评。
 真实DS03 A/B各1步/512窗口；健康段140flight/112402窗口，完整dev 524907窗口、test 403868窗口。
 永久缓存/测试保留；本次临时权重、残差矩阵和输出清理；未完整训练或验证GPU/TensorFlow，不作性能结论。
+
+独立线性探测已接入：OC-iVAE mu_d、OCALD mu_I、Proposal-C Z及各自公共最终HI，
+冻结网络，严格按已记录训练设备拟合StandardScaler+OLS，测试cycle合并报告R²/MAE/RMSE。
+18项测试通过；实际DS03三模型使用516 fit/147 val/438 test，公共六指标产物保持逐字节一致。
+探测产物使用独立目录和probe_metrics.json，不覆盖无监督结果；未知划分要求显式YAML。
+仅CPU评价验证，无网络训练或GPU验证；临时产物清理，命令及协议见README。

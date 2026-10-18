@@ -23,6 +23,8 @@
 | utils/losses.py | 单项数学损失、三阶段聚合及 KL annealing |
 | train.py | 训练/验证、AdamW/LR、best selection、checkpoint、history/审计 |
 | evaluate.py | 推理、flight 关联、dev-only scaler、评估和导出 |
+| experiments/evaluate_linear_probe.py | 独立带标签线性探测、训练设备拟合、测试设备评价 |
+| utils/linear_probe.py | mu_d/mu_I/Z确定性提取、键表/划分验证、StandardScaler+OLS及R²诊断 |
 | utils/metrics.py | 六项指标、聚合方式、非有限值诊断 |
 | experiments/ | 配对初始化、内存采样记录、调度、一致性检查与比较 |
 
