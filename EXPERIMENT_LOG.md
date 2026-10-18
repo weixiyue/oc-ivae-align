@@ -244,3 +244,8 @@
 - Epochs completed: 100
 - Checkpoint: runs/exp_tuning_mono_weight/best.pt
 - Unified all-dev/test evaluation: runs/exp_tuning_mono_weight
+
+## 2026-10-15 14:27:09 | training-run | config/ds03_vae_baseline.yaml
+- Epochs completed: 100
+- Checkpoint: runs/ds03_vae_baseline/best.pt
+- Unified all-dev/test evaluation: runs/ds03_vae_baseline
