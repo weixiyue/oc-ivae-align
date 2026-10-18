@@ -37,7 +37,7 @@ training:
   eps: 1.0e-07
   epsilon_convention: epsilon_hat_after_uncorrected_sqrt_v
   batch_size: 512
-  epochs: 20
+  epochs: 200
   checkpoint_selection: last_epoch
   healthy_cycle_threshold: 20
   loss_reduction: mean_absolute_error_all_batch_time_features_including_padding
