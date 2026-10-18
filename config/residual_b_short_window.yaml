@@ -1,0 +1,65 @@
+model_type: residual
+source:
+  repository: https://github.com/KBaja/UnsupervisedHI
+  commit: 157ebfae7baeee1e0cd52180f8e58ead3dcb448e
+  files:
+  - CMAPSS/01_data_preprocess.ipynb
+  - CMAPSS/pre_process_utils.py
+  - CMAPSS/02_train_evaluate.ipynb
+  - CMAPSS/eval_utils.py::train_and_evaluate_residual_model
+  adaptation: OC-iVAE normalization/downsampling; per-flight short windows before
+    L_max truncation/padding; window PCA and direction then flight mean; not full
+    paper data protocol reproduction
+  window_note: length 50, stride 1 is a reference Notebook candidate; not asserted
+    for all paper experiments
+data:
+  input_mode: short_window
+  h5_path: data/raw/N-CMAPSS_DS03-012.h5
+  downsample_factor: 10
+  sensor_threshold: 0.001
+  n_fc: 3
+  val_split: 0.2
+  window_length: 50
+  stride: 1
+model:
+  variant: B
+  in_features: 14
+  condition_dim: 4
+  channels:
+  - 64
+  - 64
+  - 64
+  - 64
+  kernel_size: 11
+  stride: 1
+  padding: same
+  initialization: glorot_uniform_zero_bias_after_pytorch_module_creation
+training:
+  seed: 42
+  split_seed: 42
+  optimizer: keras_adam
+  learning_rate: 0.0001
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1.0e-07
+  epsilon_convention: epsilon_hat_after_uncorrected_sqrt_v
+  batch_size: 512
+  epochs: 20
+  checkpoint_selection: last_epoch
+  healthy_cycle_threshold: 20
+  loss_reduction: mean_absolute_error_all_batch_time_features
+  sampling: shuffle_samples_then_batch
+  seed_note: source notebook leaves seed unspecified; adaptation uses seed 42
+smoke:
+  epochs: 1
+  max_batches_per_epoch: 1
+evaluation:
+  batch_size: 512
+  pca_fit: complete_dev_windows
+  pca_components: 1
+  pca_solver: auto
+  pca_random_state: 42
+  direction: mean_per_dev_unit_first10_minus_last10_windows; flip_if_negative
+  scaling: shared_dev_only_global_minmax
+  window_aggregation: mean_per_unit_cycle_after_PCA_and_direction

@@ -8,7 +8,7 @@
 
 | 文件 | 主要职责 |
 | --- | --- |
-| dataset.py | NCMAPSSDataset、unit split、HI lookup、UnitStratifiedSampler |
+| dataset.py | NCMAPSSDataset/ShortWindowDataset、flight 内索引切窗、unit split、sampler |
 | utils/preprocess.py | 离线/首次自动预处理、HDF5 缓存、cycle 分组、统计、归一化、u、RUL 校验 |
 | models/tcn.py | causal encoder、masked LayerNorm、non-causal decoder、W summary |
 | models/oc_ivae.py | OC-iVAE 装配、两个 posterior、FiLM、conditional prior、HI head |
@@ -16,8 +16,8 @@
 | models/__init__.py | 原三模型及 OCALD/Proposal-C/Residual 的显式构建分支 |
 | models/ocald.py | 有效前缀适配、原 GRU/MLP/HIHead、flight 求和 ELBO/排序/L2 |
 | models/proposal_cnn.py | 时间优先 Flatten 的 Proposal-C、unmasked MAE 和 batch Pearson |
-| models/residual.py | Residual-A/B、完整 dev PCA 数值状态、统一方向及恢复变换 |
-| experiments/train_residual.py | train-unit 健康段 MAE 训练、完整 dev PCA、公共评价 |
+| models/residual.py | Residual-A/B、磁盘窗口残差、普通 PCA、10窗口定向、flight 均值 |
+| experiments/train_residual.py | train-unit 健康段 flight/window MAE、完整 dev PCA、公共 flight 评价 |
 | utils/optimizers.py | Proposal-C/Residual 共用 Keras Adam epsilon-hat 更新 |
 | utils/experiment.py | 新模型实际配置快照、history、完整 checkpoint 保存 |
 | utils/losses.py | 单项数学损失、三阶段聚合及 KL annealing |
@@ -135,3 +135,8 @@ Dataset 的数据缓存和 unit split 共用，OCALD 仅重排左右 padding，C
 
 数学和执行顺序的数值对照见 REFACTOR_STEP1.md 至 REFACTOR_STEP5.md。
 没有从结构重构推导模型性能提升、严格物理解耦或完整实验复现结论。
+
+Residual 短窗口由独立 YAML 的 data.input_mode=short_window 选择；公共预处理使用旧缓存统计，
+从原文件重新读取逐 flight 下采样序列并存储截断/padding之前的归一化结果。窗口缓存身份独立，
+Dataset 仅保存起点索引。PCA/方向在完整 dev 窗口层面确定，随后 cycle 均值才进入公共标签关联/缩放。
+旧 flight 模式及其他模型仍读取原固定长度缓存；旧配置数值和历史产物保留。

@@ -326,11 +326,73 @@ class ShuffledSequentialBatches(Sampler[list[int]]):
         return len(self.batches)
 
 
-def healthy_training_indices(dataset: NCMAPSSDataset, cycle_threshold: int = 20) -> list[int]:
+def healthy_training_indices(dataset: NCMAPSSDataset | ShortWindowDataset, cycle_threshold: int = 20) -> list[int]:
     """Select the reference healthy prefix from train units using cycle keys only."""
     if dataset.split != 'train' or dataset.val_fraction == 0:
         raise ValueError('healthy network fitting requires the held-out-unit training split')
-    indices = [i for i, (_, cycle) in enumerate(dataset.samples) if cycle <= cycle_threshold]
+    indices = [i for i, key in enumerate(dataset.samples) if key[1] <= cycle_threshold]
     if not indices:
         raise ValueError('no training flights satisfy the healthy cycle threshold')
     return indices
+
+
+class ShortWindowDataset(Dataset):
+    """On-demand within-flight slices of full normalized pre-truncation sequences.
+
+    samples are (unit, cycle, start) in downsampled coordinates; index contains
+    only (flight index, start). No overlapping X/W windows are materialized.
+    The seven fields are X, all-valid mask, flight u, W, unit, cycle, start.
+    Labels remain one row per original flight in rul, never per window.
+    """
+    def __init__(self, h5_path: str, cycle_hi_path: None = None, config: dict | None = None,
+                 split: str = 'train', val_fraction: float = .2, random_seed: int = 42):
+        if cycle_hi_path is not None:
+            raise ValueError('window labels must be associated only after flight aggregation')
+        if split not in ('train', 'val', 'test') or not 0 <= val_fraction <= 1:
+            raise ValueError('invalid window split or validation fraction')
+        self.config = dict(config or {})
+        if self.config.get('input_mode') != 'short_window':
+            raise ValueError('ShortWindowDataset requires explicit input_mode: short_window')
+        self.split, self.val_fraction = split, val_fraction
+        self.window_length, self.stride = self.config['window_length'], self.config['stride']
+        self.processed_path = prepare_data(h5_path, self.config)
+        self.flight_keys, self.flights_x, self.flights_w, self.flights_u = [], [], [], []
+        indices = []
+        with h5py.File(self.processed_path, 'r') as source:
+            self.L_max = int(source.attrs['L_max'])  # common provenance, NOT input length
+            group = source['test' if split == 'test' else 'dev']
+            keys, offsets = group['keys'][()], group['offsets'][()]
+            units = sorted(set(map(int, keys[:, 0])))
+            selected = units if split == 'test' else NCMAPSSDataset._split_units(
+                units, val_fraction, random_seed)[split]
+            self.rul = pd.DataFrame(keys, columns=['unit', 'cycle']).assign(rul=group['rul'][()])
+            short = [tuple(map(int, key)) for i, key in enumerate(keys)
+                     if key[0] in selected and offsets[i + 1] - offsets[i] < self.window_length]
+            if short:
+                raise ValueError(f'flights shorter than window_length={self.window_length}: {short}')
+            for i, key in enumerate(keys):
+                if key[0] not in selected:
+                    continue
+                flight = len(self.flight_keys)
+                self.flight_keys.append(tuple(map(int, key)))
+                self.flights_x.append(torch.from_numpy(group['x'][offsets[i]:offsets[i + 1]]))
+                self.flights_w.append(torch.from_numpy(group['W_seq'][offsets[i]:offsets[i + 1]]))
+                self.flights_u.append(torch.from_numpy(group['u'][i]))
+                indices.extend((flight, start) for start in range(
+                    0, int(offsets[i + 1] - offsets[i]) - self.window_length + 1, self.stride))
+        self.index = np.asarray(indices, dtype=np.int64).reshape(-1, 2)
+        self.samples = np.empty((len(self.index), 3), dtype=np.int64)
+        if len(self.index):
+            self.samples[:, :2] = np.asarray(self.flight_keys)[self.index[:, 0]]
+            self.samples[:, 2] = self.index[:, 1]
+        self.valid_mask = torch.ones(self.window_length, dtype=torch.bool)
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def __getitem__(self, index: int) -> tuple:
+        flight, start = self.index[index]
+        stop = start + self.window_length
+        unit, cycle = self.flight_keys[flight]
+        return (self.flights_x[flight][start:stop], self.valid_mask, self.flights_u[flight],
+                self.flights_w[flight][start:stop], unit, cycle, int(start))

@@ -23,14 +23,14 @@ python -m pip install -r requirements.txt
 ```text
 train.py                       # 训练 CLI 和共享普通函数
 evaluate.py                    # cycle 推理、标签关联、dev-only 缩放与导出
-dataset.py                     # Dataset、unit/cycle 划分与 sampler
+dataset.py                     # flight/window Dataset、unit/cycle 划分与 sampler
 models/
     oc_ivae.py                 # 模型装配、分支、FiLM、conditional prior、HI head
     tcn.py                     # causal encoder 与 non-causal decoder
     vae.py                     # 两个已有 baseline 的差异组件
     ocald.py                   # 原 8D I/C OCALD、padding 适配及模型专属损失
     proposal_cnn.py            # Proposal-C CNN 与 batch Pearson 约束
-    residual.py                # Residual-A/B、完整 dev PCA、方向及恢复变换
+    residual.py                # Residual-A/B、磁盘残差、窗口 PCA/方向与 flight 聚合
     __init__.py                # 显式模型选择
 utils/
     preprocess.py             # N-CMAPSS 数据处理
@@ -140,8 +140,10 @@ python -m experiments.run_w_summary_ablation --help
 | [ocald_joint](config/ocald_joint.yaml) | 联合 100 轮；KL 各 1、排序 10、头部 L2=1e-4 |
 | [ocald_joint_decoder_w](config/ocald_joint_decoder_w.yaml) | 同上，显式开启 decoder W 输入 |
 | [proposal_cnn_c](config/proposal_cnn_c.yaml) | CNN + batch Pearson C；Adam 1e-4、batch 20、50 轮 |
-| [residual_a](config/residual_a.yaml) | X/W 重构；健康段 MAE、Adam 1e-4、batch 512、20 轮 |
-| [residual_b](config/residual_b.yaml) | 仅 W 预测 X；健康段 MAE、Adam 1e-4、batch 512、20 轮 |
+| [residual_a](config/residual_a.yaml) | 旧 flight 配置，已有训练数值保留 |
+| [residual_b](config/residual_b.yaml) | 旧 flight 配置，已有训练数值保留 |
+| [residual_a_short_window](config/residual_a_short_window.yaml) | X/W 重构，长度50/stride1；健康段窗口 MAE、20轮 |
+| [residual_b_short_window](config/residual_b_short_window.yaml) | 仅 W 预测 X；相同窗口、训练与 flight 评价协议 |
 
 实际迁移来源固定为 [kgld 4f9e53cd3623b5cf0311d594fd7efcd4bec88206](https://github.com/weixiyue/kgld/tree/4f9e53cd3623b5cf0311d594fd7efcd4bec88206)
 的 model.py、losses.py、train.py 与对应三份配置，以及
@@ -181,30 +183,47 @@ checkpoint 包含模型类型、阶段、完整实际配置、seed 和预处理�
 重评使用运行快照，结构/数据不一致的外部配置会报错，其余设置优先使用 checkpoint 保存配置。
 每轮 history 记录真实损失项、权重、优化步数、抽取样本数和耗时；CNN 不记录伪造的 KL/HSIC。
 
-Residual-A/B 来自同一 UnsupervisedHI commit `157ebfae7baeee1e0cd52180f8e58ead3dcb448e` 的
-`CMAPSS/02_train_evaluate.ipynb` 和 `train_and_evaluate_residual_model`，采用公共 OC-iVAE 输入协议。
+Residual-A/B 来自 UnsupervisedHI commit `157ebfae7baeee1e0cd52180f8e58ead3dcb448e` 的
+`CMAPSS/01_data_preprocess.ipynb`、`pre_process_utils.py`、`02_train_evaluate.ipynb` 和 `eval_utils.py`。
 A 为 concat(X,W)→4×Conv64/kernel11/tanh→逐时刻 Dense14；B 为 W→4×Conv64/kernel11/ReLU→Conv14/kernel11。
-Glorot uniform/零偏置、Keras Adam 数值约定与 Proposal-C 共用 `utils/optimizers.py`。
-仅 train 设备 cycle<=20 用于网络更新，不使用 hs/HI/RUL；样本级 shuffle，unmasked 平均 MAE，
-默认 batch512、lr1e-4、20 轮、seed42，保存最后轮，无调度/早停或其他损失。
+Glorot uniform/零偏置和 Keras Adam 数值约定与 Proposal-C 共用，网络与 MAE 未改动。
 
-完整 dev 的绝对残差按时间优先展平（包含公共 padding），拟合 sklearn 单分量 PCA；
-以各 dev 设备前10减后10周期均值的跨设备平均差确定统一方向，负差时翻转。
-test 仅复用 PCA/方向；随后共用完整 dev 全局 Min–Max 和六指标，无窗口聚合、平滑或裁剪。
-PCA 使用 auto solver、显式 random_state=42；训练阶段的健康段先验与 PCA 的完整 dev 拟合集合分别记录。
-`best.pt` 保存网络、完整配置、数值 PCA 参数、方向、拟合键及预处理来源，重评不重新拟合 PCA。
+新增独立 `residual_a_short_window.yaml`、`residual_b_short_window.yaml`，显式 `data.input_mode: short_window`。
+默认长度50、stride1是参考 Notebook 的短窗口候选，不声称适用于所有论文实验。
+沿用 OC-iVAE 原文件、变量顺序、设备划分、设备 X/dev 全局 W 标准化及每 flight 下采样。
+变长缓存复用公共 flight 缓存的统计，存储 **L_max 截断及 padding 之前** 的真实序列；
+Dataset 只保存 (flight, start) 索引并按需切片，不物化全部重叠窗口。缓存身份包含模式、窗口设置和处理规则。
+窗口不跨 flight，数量为 `floor((L-window_length)/stride)+1`；过短 flight 报错并列出键。
+公共 flight 缓存和新变长缓存均保留在 data/processed/，可用以下命令提前准备：
 
 ```bash
-python -m experiments.train_residual --config config/residual_a.yaml \
-  --run-dir runs/residual_a_seed42 --device cuda --threads 2
-python -m experiments.train_residual --config config/residual_b.yaml \
-  --run-dir runs/residual_b_seed42 --device cuda --threads 2
-python evaluate.py --config runs/residual_a_seed42/config.yaml \
-  --output-dir runs/residual_a_seed42/reevaluation --device cuda --threads 2
+python -m utils.preprocess --config config/residual_a_short_window.yaml
 ```
 
-Residual 入口默认 CPU；CPU 轻量检查可用 `--device cpu --smoke`，只做1轮、最多1个健康段 batch，
-PCA、scaler 和评价仍读取完整 dev/test。需要新 run 目录，拒绝覆盖既有结果。
+网络仅更新 train 设备 cycle<=20 的窗口，不使用 hs/HI/RUL；样本级 shuffle 后组 batch。
+新短窗口配置保持 batch512、lr1e-4、20轮、seed42、最后轮，无调度/早停或其他损失。
+旧 `residual_a.yaml`/`residual_b.yaml` 保留 flight 输入和已有数值（当前200轮），旧 checkpoint/结果可继续重评。
+
+窗口绝对残差按时间优先展平，用全部 dev **窗口** 拟合普通单分量 PCA；
+按各 dev 设备 cycle/窗口起点排序后的前10与后10 **窗口** 均值差确定全局方向，负差时翻转。
+test 复用 PCA 和方向；随后同 unit/cycle 的窗口分数取均值，才交给公共 dev 全局 Min–Max 和六指标。
+不跨周期平滑、不逐设备缩放、不裁剪。RUL/HI 仅在聚合后按 flight 关联，不按窗口重复计权。
+残差分批写入临时磁盘矩阵，普通 PCA 使用 auto solver，不替换为 IncrementalPCA；临时矩阵在上下文退出时删除。
+checkpoint 保存数值 PCA 参数、方向、完整 dev flight 键、窗口键摘要/数量、窗口设置及预处理来源，重评不重拟合。
+这是采用 OC-iVAE 归一化的短窗口适配版，**不是原论文完整数据协议复现**。
+
+```bash
+python -m experiments.train_residual --config config/residual_a_short_window.yaml \
+  --run-dir runs/residual_a_short_window_seed42 --device cuda --threads 2
+python -m experiments.train_residual --config config/residual_b_short_window.yaml \
+  --run-dir runs/residual_b_short_window_seed42 --device cuda --threads 2
+python evaluate.py --config runs/residual_a_short_window_seed42/config.yaml \
+  --output-dir runs/residual_a_short_window_seed42/reevaluation --device cuda --threads 2
+```
+
+入口默认 CPU；加 `--device cpu --smoke` 只做1轮、最多1个健康段 batch，PCA/评价仍用完整 dev/test。
+history 记录健康 flight 数、候选窗口数、更新步数/累计步数、实际抽样数、MAE 及耗时。
+每次使用新目录，拒绝覆盖既有结果；旧 flight 模式按每设备前后10个 flight 定向，保持历史语义。
 
 既有 W-summary 配对实验命令：
 
@@ -295,6 +314,28 @@ smoke 命令由 `tests/test_experiment_smoke.py` 使用上述训练命令加 `--
 旧 OC-iVAE DS03 checkpoint 的1101条 flight 在本次修改前后重评，scores、metrics、两张曲线逐字节一致。
 测试临时数据/配置/权重/曲线自动清理。未运行完整20轮或 TensorFlow/GPU 对照。
 
+2026-10-18 短窗口验证：13 项 unittest 通过，覆盖八份配置 CPU CLI smoke；
+归一化提取前后固定张量完全一致，源 sequence_generator 的2850个合成窗口 X/W/键逐元素一致。
+新增测试核对窗口边界/数量、未截断序列、统计复用、短 flight 报错、PCA/10窗口方向/flight均值顺序、
+推理 batch 变化容差、完整键覆盖、重载和 dev-only 缩放。旧 OC-iVAE、flight A/B 的真实 DS03
+checkpoint 重评：scores、metrics、两张曲线分别与修改前逐字节一致。
+
+独立真实 DS03 smoke（均已清理临时输出）：
+
+```bash
+OPENBLAS_NUM_THREADS=8 python -m experiments.train_residual --config config/residual_a_short_window.yaml \
+  --run-dir /tmp/residual_window_source/real_a --device cpu --threads 8 --smoke
+OPENBLAS_NUM_THREADS=8 python -m experiments.train_residual --config config/residual_b_short_window.yaml \
+  --run-dir /tmp/residual_window_source/real_b --device cpu --threads 8 --smoke
+```
+
+A/B 均使用50/stride1，候选健康段为140个 train flight、112402个窗口；各只更新1步/512个窗口。
+PCA 使用完整663个 dev flight的524907个窗口，test为438个flight的403868个窗口；
+公共 scaler 在663条聚合后的 dev 分数上拟合，最终 CSV 为1101条 flight。
+独立重载参数、六指标重算和键覆盖均通过；真实样本固定权重下 batch127/512 的最终分数一致。
+保留正式变长缓存和永久测试，清理本次临时配置、权重、残差矩阵、图及下载参考文件。
+未运行完整20轮、TensorFlow/GPU对照，不将 smoke 或输入组织变化解释为性能改善。
+
 历史审计报告保留原有记录；新实验不生成额外的历史对照或验证目录。
 
 CUDA 配对实验须在启动 Python 前设置确定性计算环境变量：
@@ -309,4 +350,4 @@ CUBLAS_WORKSPACE_CONFIG=:4096:8 python -m experiments.run_w_summary_ablation \
 当前代码说明见 [CODE_WALKTHROUGH.md](docs/CODE_WALKTHROUGH.md)。
 原状态和走读保留在 [docs/history/](docs/history/)，设计、旧审计和评估验证文档保留历史结论。
 CPU 上模型/损失/梯度/采样对照通过；DS03 旧 checkpoint 的 1101 个 flight 重评一致。
-没有真实数据重新训练、GPU 验证或真实 DS02 实验，不将这些检查称为完整实验复现。
+本轮真实数据仅做 Residual 单步 smoke；没有完整预算训练、GPU 验证或真实 DS02 实验，不称为完整实验复现。

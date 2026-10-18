@@ -1,10 +1,17 @@
 """Residual-A/B, UnsupervisedHI 157ebfae; adapted to shared OC-iVAE tensors."""
 from __future__ import annotations
 
+from contextlib import contextmanager
+import hashlib
+from pathlib import Path
+import tempfile
+
 import numpy as np
+import pandas as pd
 from sklearn.decomposition import PCA
 import torch
 from torch import nn
+from torch.utils.data import DataLoader
 
 
 class ResidualModel(nn.Module):
@@ -42,32 +49,53 @@ class ResidualModel(nn.Module):
         return self.output(hidden).transpose(1, 2)
 
 
-def fit_residual_pca(residuals: np.ndarray, keys: list[tuple[int, int]], seed: int) -> dict:
-    """Fit on ALL dev flights; orient by unit early-minus-late ten-cycle means.
+def fit_residual_pca(residuals: np.ndarray, keys, seed: int) -> dict:
+    """Ordinary sklearn PCA on complete dev; orient BEFORE any flight aggregation.
 
-    Residual columns are time then sensor, including all common padding positions.
-    Keys, not HI/RUL labels, determine ordering and orientation. PCA transform is
-    also used on dev so independent restoration uses the identical scoring path.
+    Keys are (unit,cycle) for legacy flights or (unit,cycle,start) for windows.
+    The first/last ten entries per unit are ordered by cycle and window start.
+    Use transform on dev too, so saved numeric parameters suffice for reload.
     """
-    if residuals.ndim != 2 or len(residuals) != len(keys) or not np.isfinite(residuals).all():
-        raise ValueError('PCA requires finite flattened residuals matching dev keys')
+    if residuals.ndim != 2 or len(residuals) != len(keys):
+        raise ValueError('PCA requires flattened residuals matching dev keys')
+    for start in range(0, len(residuals), 8192):
+        if not np.isfinite(residuals[start:start + 8192]).all():
+            raise ValueError('PCA requires finite residuals')
     key_array = np.asarray(keys, dtype=np.int64)
-    if key_array.shape != (len(residuals), 2) or len(set(map(tuple, key_array))) != len(keys):
-        raise ValueError('PCA requires unique unit/cycle keys')
+    if key_array.ndim != 2 or key_array.shape[1] not in (2, 3):
+        raise ValueError('PCA requires unit/cycle[/window-start] keys')
+    if len(np.unique(key_array, axis=0)) != len(keys):
+        raise ValueError('PCA requires unique fit keys')
+    # Keep normal PCA and its auto solver. Never fall back to IncrementalPCA.
+    # For the large N, small window dimension case, sklearn auto uses covariance
+    # eigendecomposition; the input itself is an on-disk residual memmap.
     pca = PCA(n_components=1, random_state=seed).fit(residuals)
-    scores = pca.transform(residuals).ravel()
+    state = dict(mean=pca.mean_, components=pca.components_, direction=1, fit_split='dev')
+    scores = np.empty(len(keys), dtype=pca.components_.dtype)
+    for start in range(0, len(keys), 8192):
+        scores[start:start + 8192] = residual_scores(residuals[start:start + 8192], state)
     differences = []
     for unit in np.unique(key_array[:, 0]):
         indices = np.flatnonzero(key_array[:, 0] == unit)
-        indices = indices[np.argsort(key_array[indices, 1])]
-        unit_scores = scores[indices]
+        order = (np.lexsort((key_array[indices, 2], key_array[indices, 1]))
+                 if key_array.shape[1] == 3 else np.argsort(key_array[indices, 1]))
+        unit_scores = scores[indices[order]]
         differences.append(float(unit_scores[:10].mean() - unit_scores[-10:].mean()))
     difference = float(np.mean(differences))
-    return dict(mean=pca.mean_, components=pca.components_, direction=-1 if difference < 0 else 1,
-                early_minus_late_mean=difference, fit_split='dev', fit_keys=key_array.tolist(),
-                n_samples_seen=len(keys), flatten_order='time_then_channels_including_padding',
-                n_components=1, solver=pca._fit_svd_solver, random_state=seed,
-                explained_variance=pca.explained_variance_, labels_used=False)
+    windows = key_array.shape[1] == 3
+    state.update(direction=-1 if difference < 0 else 1, early_minus_late_mean=difference,
+                 fit_keys=(np.unique(key_array[:, :2], axis=0) if windows else key_array).tolist(),
+                 n_samples_seen=len(keys), input_mode='short_window' if windows else 'flight',
+                 flatten_order='time_then_channels_no_padding' if windows
+                 else 'time_then_channels_including_padding', n_components=1,
+                 solver=pca._fit_svd_solver, random_state=seed,
+                 explained_variance=pca.explained_variance_, labels_used=False)
+    if windows:
+        state.update(fit_key_columns=['unit', 'cycle', 'window_start'],
+                     fit_window_key_sha256=hashlib.sha256(key_array).hexdigest(),
+                     direction_entries='first10_minus_last10_windows_per_dev_unit',
+                     window_aggregation='mean_per_unit_cycle_after_direction')
+    return state
 
 
 def residual_scores(residuals: np.ndarray, state: dict) -> np.ndarray:
@@ -82,3 +110,43 @@ def residual_scores(residuals: np.ndarray, state: dict) -> np.ndarray:
     if not np.isfinite(scores).all():
         raise FloatingPointError('nonfinite residual PCA scores')
     return scores
+
+
+@contextmanager
+def window_residual_matrix(model: ResidualModel, dataset, device: str, batch_size: int):
+    """Generate one disk-backed residual matrix in batches; always remove it on exit."""
+    model.to(device).eval()
+    with tempfile.TemporaryDirectory(prefix='residual_window_matrix_') as directory:
+        matrix = np.memmap(Path(directory) / 'residuals.f32', dtype=np.float32, mode='w+',
+                           shape=(len(dataset), dataset.window_length * 14))
+        try:
+            offset = 0
+            with torch.no_grad():
+                for x, _, _, w, _, _, _ in DataLoader(dataset, batch_size=batch_size, shuffle=False):
+                    x, w = x.to(device), w.to(device)
+                    residual = (model(x, w) - x).abs().reshape(len(x), -1)
+                    if not torch.isfinite(residual).all():
+                        raise FloatingPointError('nonfinite window residuals')
+                    matrix[offset:offset + len(x)] = residual.cpu().numpy()
+                    offset += len(x)
+            matrix.flush()
+            yield matrix
+        finally:
+            matrix._mmap.close()
+
+
+def predict_window_flights(model: ResidualModel, dataset, state: dict,
+                           device: str, batch_size: int) -> pd.DataFrame:
+    """Apply saved window PCA/direction, then average windows to one score per flight."""
+    if (state.get('input_mode') != 'short_window' or state['window_length'] != dataset.window_length
+            or state['stride'] != dataset.stride):
+        raise ValueError('saved PCA input mode/window settings differ from window dataset')
+    with window_residual_matrix(model, dataset, device, batch_size) as matrix:
+        scores = np.empty(len(dataset), dtype=np.float64)
+        for start in range(0, len(dataset), 8192):
+            scores[start:start + 8192] = residual_scores(matrix[start:start + 8192], state)
+    windows = pd.DataFrame(dataset.samples, columns=['unit', 'cycle', 'window_start']).assign(score=scores)
+    flights = windows.groupby(['unit', 'cycle'], sort=True, as_index=False).score.mean()
+    if flights[['unit', 'cycle']].values.tolist() != [list(k) for k in dataset.flight_keys]:
+        raise ValueError('window aggregation does not cover every original flight exactly once')
+    return flights

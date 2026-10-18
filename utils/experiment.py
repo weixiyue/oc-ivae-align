@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import yaml
 
-from dataset import NCMAPSSDataset
+from dataset import NCMAPSSDataset, ShortWindowDataset
 from evaluate import _resolve_main_h5_path
 
 
@@ -24,7 +24,8 @@ def seed_run(seed: int) -> None:
 
 
 def start_run(config_path: str, run_dir: str | None, model_type: str,
-              device: str, smoke: bool) -> tuple[dict, Path, NCMAPSSDataset, NCMAPSSDataset]:
+              device: str, smoke: bool) -> tuple[dict, Path, NCMAPSSDataset | ShortWindowDataset,
+                                                NCMAPSSDataset | ShortWindowDataset]:
     """Resolve common data and record the actual train/val units, without labels."""
     with open(config_path, encoding='utf-8') as file:
         config = yaml.safe_load(file)
@@ -43,19 +44,21 @@ def start_run(config_path: str, run_dir: str | None, model_type: str,
     for key in ('cycle_hi_path', 'test_cycle_hi_path', 'processed_dir'):
         if data.get(key) is not None:
             data[key] = str(Path(data[key]).resolve())
-    train = NCMAPSSDataset(data['h5_path'], None, data, split='train',
+    dataset_class = (ShortWindowDataset if model_type == 'residual'
+                     and data.get('input_mode') == 'short_window' else NCMAPSSDataset)
+    train = dataset_class(data['h5_path'], None, data, split='train',
                            val_fraction=data['val_split'], random_seed=training['split_seed'])
-    val = NCMAPSSDataset(data['h5_path'], None, data, split='val',
+    val = dataset_class(data['h5_path'], None, data, split='val',
                          val_fraction=data['val_split'], random_seed=training['split_seed'])
-    config['model']['in_features'] = int(train.x.shape[-1])
+    config['model']['in_features'] = int(train[0][0].shape[-1])
     config['run_dir'] = str(output.resolve())
     config['run_metadata'] = dict(
         source_config=str(Path(config_path).resolve()), seed=training['seed'],
         split_seed=training['split_seed'], smoke=smoke, device=device,
         processed_data=str(train.processed_path), torch_version=str(torch.__version__),
         numpy_version=np.__version__, torch_num_threads=torch.get_num_threads(),
-        train_units=sorted({u for u, _ in train.samples}),
-        val_units=sorted({u for u, _ in val.samples}),
+        train_units=sorted({int(key[0]) for key in train.samples}),
+        val_units=sorted({int(key[0]) for key in val.samples}),
     )
     output.mkdir(parents=True, exist_ok=False)
     return config, output, train, val

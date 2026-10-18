@@ -9,7 +9,7 @@
 - train.py 使用普通函数，CLI 与配对实验共用训练循环；没有 Trainer 继承层。
 - evaluate.py 直接处理 cycle 分数表，独立 metrics.py 保留六项指标公式。
 - dataset.py 合并数据加载/取样，utils/preprocess.py 保留 N-CMAPSS 处理。
-- 原十份 YAML 内容不变；config/ 新增 OCALD/Proposal-C 四份及 Residual 两份完整独立配置，实验入口位于 experiments/。
+- 原十份 YAML 内容不变；config/ 新增 OCALD/Proposal-C 四份及 Residual 四份完整独立配置（含两份短窗口），实验入口位于 experiments/。
 - 新运行使用独立 runs 目录，记录配置、best.pt、history、scores 和评估出处。
 - 此前按批准删除旧 tests/、test.py 和空目录；本次新增迁移模型的永久数学与 smoke 测试。
 
@@ -85,3 +85,9 @@ OCALD 与固定源 commit 的前向/损失/梯度/联合采样完全一致；CNN
 10 项测试通过，包含六份配置 CPU smoke；Residual smoke 每次7条更新、144条 dev 拟合、48条 test。
 数值/梯度、sklearn PCA/方向、重载、dev-only 缩放及既有入口回归通过。无完整训练或 TensorFlow/GPU 对照。
 本次临时数据、配置、权重和结果自动清理；命令与限制见 README。
+
+2026-10-18 Residual 短窗口接入：新增两份独立50/stride1配置，旧 flight 配置数值保留。
+变长有效序列复用原统计，在 L_max 截断/padding前切窗；普通 PCA/10窗口方向后按flight均值再公共缩放。
+13项测试通过，含八份配置 CPU smoke、源窗口对照、旧 OC-iVAE/flight A/B 真实checkpoint等价重评。
+真实DS03 A/B各1步/512窗口；健康段140flight/112402窗口，完整dev 524907窗口、test 403868窗口。
+永久缓存/测试保留；本次临时权重、残差矩阵和输出清理；未完整训练或验证GPU/TensorFlow，不作性能结论。

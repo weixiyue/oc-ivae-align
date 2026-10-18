@@ -18,11 +18,11 @@ import yaml
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader
 
-from dataset import NCMAPSSDataset
+from dataset import NCMAPSSDataset, ShortWindowDataset
 from models import build_model
 from models.ocald import OCALD
 from models.proposal_cnn import ProposalCNN
-from models.residual import ResidualModel, residual_scores
+from models.residual import ResidualModel, residual_scores, predict_window_flights
 from models.tcn import W_SUMMARY_DIM
 from utils.metrics import evaluate_all
 
@@ -104,7 +104,9 @@ def run_evaluation(
             raise FileExistsError(f'evaluation directory already exists: {output_dir}')
     h5_path = _resolve_main_h5_path(data_config)
     # No held-out dev units during evaluation; labels are associated separately.
-    dev_dataset = NCMAPSSDataset(h5_path, None, flat, split='train', val_fraction=0.0)
+    window_mode = model_type == 'residual' and data_config.get('input_mode') == 'short_window'
+    dataset_class = ShortWindowDataset if window_mode else NCMAPSSDataset
+    dev_dataset = dataset_class(h5_path, None, flat, split='train', val_fraction=0.0)
     in_features = int(dev_dataset[0][0].shape[-1])
     if model_type != 'oc_ivae':
         if in_features != raw['model']['in_features']:
@@ -114,7 +116,7 @@ def run_evaluation(
         if model_type == 'proposal_cnn' and dev_dataset.L_max != raw['model']['window_size']:
             raise ValueError('checkpoint window_size differs from prepared L_max')
     flat['in_features'] = in_features
-    test_dataset = NCMAPSSDataset(
+    test_dataset = dataset_class(
         h5_path, None, flat, split='test',
     )
     model = build_model(raw, flat)
@@ -124,8 +126,13 @@ def run_evaluation(
         raise ValueError('checkpoint decoder_use_W_summary does not match evaluation config')
     model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
     residual_state = checkpoint['residual_state'] if model_type == 'residual' else None
-    if residual_state is not None and residual_state['fit_keys'] != [list(k) for k in dev_dataset.samples]:
-        raise ValueError('checkpoint PCA fit keys differ from complete dev flights')
+    if residual_state is not None:
+        fit_keys = dev_dataset.flight_keys if window_mode else dev_dataset.samples
+        if residual_state['fit_keys'] != [list(k) for k in fit_keys]:
+            raise ValueError('checkpoint PCA fit keys differ from complete dev flights')
+        if window_mode and (residual_state['n_samples_seen'] != len(dev_dataset) or
+                residual_state['fit_window_key_sha256'] != hashlib.sha256(dev_dataset.samples).hexdigest()):
+            raise ValueError('checkpoint PCA window fit set differs from complete dev windows')
     frames: dict[str, pd.DataFrame] = {}
     reference_meta: dict[str, dict[str, Any]] = {}
     for split, dataset in [('dev', dev_dataset), ('test', test_dataset)]:
@@ -145,7 +152,7 @@ def run_evaluation(
         for split, frame in [('dev', dev), ('test', test)]
     }
     original_units = NCMAPSSDataset._split_units(
-        sorted({u for u, _ in dev_dataset.samples}), float(raw['data']['val_split']), 42)
+        sorted({int(key[0]) for key in dev_dataset.samples}), float(raw['data']['val_split']), 42)
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     destination = (
         Path(output_dir) if output_dir
@@ -210,6 +217,15 @@ def run_evaluation(
             residual_pca={key: value for key, value in residual_state.items()
                           if key not in ('mean', 'components', 'explained_variance')},
         )
+    if window_mode:
+        metadata.update(
+            input_preprocessing='short windows with OC-iVAE normalization; not full source-paper protocol',
+            score='window absolute residual -> dev PCA -> dev direction -> mean per flight',
+            window_length=dev_dataset.window_length, stride=dev_dataset.stride,
+            n_windows=dict(dev=len(dev_dataset), test=len(test_dataset)),
+            no_L_max_truncation=True, no_input_padding=True,
+        )
+        metadata['scaling']['window_aggregation'] = 'mean per unit/cycle AFTER PCA and direction'
     predictions = pd.concat([dev, test], ignore_index=True)
     predictions[['split', 'unit', 'cycle', 'score', 'hi', 'hi_gt', 'rul']].to_csv(
         destination / 'scores.csv', index=False,
@@ -251,6 +267,10 @@ def predict_cycles(
     if isinstance(model, ResidualModel):
         if residual_state is None:
             raise ValueError('residual scoring requires saved dev PCA and direction state')
+        if isinstance(dataset, ShortWindowDataset):
+            return predict_window_flights(model, dataset, residual_state, device, batch_size)
+        if residual_state.get('input_mode', 'flight') != 'flight':
+            raise ValueError('short-window checkpoint cannot use legacy flight inference')
         residuals = predict_residuals(model, dataset, device, batch_size)
         scores = residual_scores(residuals, residual_state)
         return pd.DataFrame(dataset.samples, columns=['unit', 'cycle']).assign(score=scores).sort_values(

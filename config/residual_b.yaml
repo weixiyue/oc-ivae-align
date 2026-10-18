@@ -8,6 +8,7 @@ source:
   adaptation: PyTorch; shared OC-iVAE cached fixed-length input including padding;
     no window aggregation or smoothing
 data:
+  input_mode: flight
   h5_path: data/raw/N-CMAPSS_DS03-012.h5
   downsample_factor: 10
   sensor_threshold: 0.001

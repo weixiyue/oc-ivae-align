@@ -241,6 +241,24 @@ def process_cycle(
     if L_max <= 0:
         raise ValueError("L_max must be positive")
 
+    x_norm, W = normalize_cycle(cycle_data, mean, std, valid_mask, W_mean_global, W_std_global)
+
+    x_padded, W_padded, timestep_mask = _tail_truncate_or_head_pad(
+        x_norm,
+        W,
+        L_max,
+    )
+    return (
+        torch.from_numpy(x_padded),
+        torch.from_numpy(W_padded),
+        torch.from_numpy(timestep_mask),
+    )
+
+
+def normalize_cycle(cycle_data: dict, mean: np.ndarray, std: np.ndarray,
+                    valid_mask: np.ndarray, W_mean_global: np.ndarray | None = None,
+                    W_std_global: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Shared float32 normalization BEFORE any truncation or padding."""
     X_s = np.asarray(cycle_data["X_s"], dtype=np.float32)
     W = np.asarray(cycle_data["W"], dtype=np.float32)
     _validate_cycle_arrays(X_s, W)
@@ -266,16 +284,7 @@ def process_cycle(
             X_s[:, sensor_mask] - mean_array[sensor_mask]
         ) / std_array[sensor_mask]
 
-    x_padded, W_padded, timestep_mask = _tail_truncate_or_head_pad(
-        x_norm,
-        W,
-        L_max,
-    )
-    return (
-        torch.from_numpy(x_padded),
-        torch.from_numpy(W_padded),
-        torch.from_numpy(timestep_mask),
-    )
+    return x_norm, W
 
 
 def construct_u(
@@ -411,6 +420,11 @@ def prepare_data(h5_path: str, config: dict) -> Path:
     Labels are kept separate from model inputs. Source identity uses file stats,
     not a full content hash, to avoid rereading the raw file on every launch.
     """
+    mode = config.get('input_mode', 'flight')
+    if mode == 'short_window':
+        return prepare_window_sequences(h5_path, config)
+    if mode != 'flight':
+        raise ValueError(f'unknown input_mode: {mode}')
     source = Path(h5_path).resolve(strict=True)
     parameters = {}
     for key in ('downsample_factor', 'n_fc'):
@@ -500,6 +514,80 @@ def prepare_data(h5_path: str, config: dict) -> Path:
     finally:
         temporary.unlink()
     print(f'Prepared data saved: {destination}', flush=True)
+    return destination
+
+
+def prepare_window_sequences(h5_path: str, config: dict) -> Path:
+    """Cache full normalized flights using EXISTING common statistics, never tail tensors.
+
+    Only sequence storage and window identity are new. The common flight cache,
+    its statistics, old identity and all existing results remain unchanged.
+    """
+    for name in ('window_length', 'stride'):
+        value = config[name]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f'data.{name} must be a positive integer')
+    base_config = dict(config, input_mode='flight')
+    base = prepare_data(h5_path, base_config)
+    with h5py.File(base, 'r') as common:
+        base_metadata = common.attrs['metadata']
+    metadata = dict(version=1, input_mode='short_window', window_length=config['window_length'],
+                    stride=config['stride'], rule='within_flight_before_truncation_no_padding',
+                    normalization_source=str(base), common_metadata=json.loads(base_metadata))
+    encoded = json.dumps(metadata, sort_keys=True)
+    identity = hashlib.sha256(encoded.encode()).hexdigest()[:20]
+    destination = base.parent / f'{Path(h5_path).stem}_short_window_{identity}.h5'
+    if destination.exists():
+        with h5py.File(destination, 'r') as cached:
+            if cached.attrs.get('metadata') != encoded or not cached.attrs.get('complete', False):
+                raise ValueError(f'invalid short-window sequences: {destination}')
+        return destination
+    print(f'Preparing full pre-truncation sequences: {destination}', flush=True)
+    with tempfile.NamedTemporaryFile(dir=base.parent, suffix='.tmp', delete=False) as temp:
+        temporary = Path(temp.name)
+    try:
+        with h5py.File(temporary, 'w') as target, h5py.File(base, 'r') as common:
+            target.attrs['metadata'] = encoded
+            target.attrs['L_max'] = common.attrs['L_max']  # provenance only, never a window limit
+            for split in ('dev', 'test'):
+                arrays = load_h5(h5_path, split)
+                cycles = group_by_unit_cycle(arrays['A'], arrays['W'], arrays['X_s'],
+                                             factor=config['downsample_factor'])
+                del arrays
+                keys = sorted(cycles)
+                expected_keys = common[split]['keys'][()]
+                if not np.array_equal(expected_keys, keys):
+                    raise ValueError('raw flight keys differ from normalization cache')
+                lengths = np.asarray([len(cycles[k]['X_s']) for k in keys])
+                short = [keys[i] for i in np.flatnonzero(lengths < config['window_length'])]
+                if short:
+                    raise ValueError(f'{split} flights shorter than window_length={config["window_length"]}: {short}')
+                group = target.create_group(split)
+                group.create_dataset('keys', data=expected_keys)
+                group.create_dataset('rul', data=common[split]['rul'][()])
+                group.create_dataset('u', data=common[split]['u'][()])
+                offsets = np.r_[0, lengths.cumsum()]
+                group.create_dataset('offsets', data=offsets)
+                x_store = group.create_dataset('x', shape=(int(offsets[-1]), 14), dtype='f4', compression='lzf')
+                w_store = group.create_dataset('W_seq', shape=(int(offsets[-1]), 4), dtype='f4', compression='lzf')
+                stats = common[split]['sensor_stats']
+                unit_index = {int(u): i for i, u in enumerate(stats['units'][()])}
+                for i, key in enumerate(keys):
+                    j = unit_index[key[0]]
+                    x, w = normalize_cycle(cycles[key], stats['mean'][j], stats['std'][j],
+                                            stats['valid_mask'][j], common['W_mean_global'][()],
+                                            common['W_std_global'][()])
+                    x_store[offsets[i]:offsets[i + 1]] = x
+                    w_store[offsets[i]:offsets[i + 1]] = w
+                del cycles
+            source = Path(h5_path).resolve()
+            original = metadata['common_metadata']
+            if source.stat().st_size != original['size'] or source.stat().st_mtime_ns != original['mtime_ns']:
+                raise ValueError('raw data changed during short-window preprocessing')
+            target.attrs['complete'] = True
+        os.link(temporary, destination)
+    finally:
+        temporary.unlink()
     return destination
 
 
