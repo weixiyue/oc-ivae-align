@@ -31,27 +31,31 @@ class ExperimentSmoke(unittest.TestCase):
             raw = root / 'synthetic.h5'
             with h5py.File(raw, 'w') as source:
                 for split, units in [('dev', range(1, 7)), ('test', range(7, 9))]:
-                    a = np.asarray([[u, c, u % 3 + 1, 1] for u in units for c in range(1, 9)
+                    a = np.asarray([[u, c, u % 3 + 1, 1] for u in units for c in range(1, 25)
                                     for _ in range(9 + c)], dtype=float)
                     x = rng.normal(size=(len(a), 14))
                     x[:, 0] = 2  # dead sensor follows shared preprocessing
                     source[f'A_{split}'] = a
                     source[f'X_s_{split}'] = x
                     source[f'W_{split}'] = rng.normal(size=(len(a), 4))
-                    source[f'Y_{split}'] = (9 - a[:, 1])[:, None]
-                    pd.DataFrame([dict(unit=u, cycle=c, HI=1 - c / 9) for u in units
-                                  for c in range(1, 9)]).to_hdf(root / f'cycle_{split}.h5', key='df')
+                    source[f'Y_{split}'] = (25 - a[:, 1])[:, None]
+                    pd.DataFrame([dict(unit=u, cycle=c, HI=1 - c / 25) for u in units
+                                  for c in range(1, 25)]).to_hdf(root / f'cycle_{split}.h5', key='df')
             reference = None
-            for name in ('ocald_original', 'ocald_joint', 'ocald_joint_decoder_w', 'proposal_cnn_c'):
+            for name in ('ocald_original', 'ocald_joint', 'ocald_joint_decoder_w', 'proposal_cnn_c', 'residual_a', 'residual_b'):
                 with self.subTest(name=name):
                     config = yaml.safe_load((ROOT / f'config/{name}.yaml').read_text())
                     config['data'].update(h5_path=str(raw), downsample_factor=2,
                         cycle_hi_path=str(root / 'cycle_dev.h5'), test_cycle_hi_path=str(root / 'cycle_test.h5'),
                         processed_dir=str(root / 'processed'))
+                    if name.startswith('residual_'):
+                        config['training']['batch_size'] = 7
                     source = root / f'{name}.yaml'
                     source.write_text(yaml.safe_dump(config))
                     output = root / name
                     entry = 'experiments.train_proposal_cnn' if name == 'proposal_cnn_c' else 'experiments.train_ocald'
+                    if name.startswith('residual_'):
+                        entry = 'experiments.train_residual'
                     command = [sys.executable, '-m', entry, '--config', str(source), '--run-dir', str(output),
                                '--device', 'cpu', '--threads', '2', '--smoke']
                     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
@@ -70,13 +74,14 @@ class ExperimentSmoke(unittest.TestCase):
                     if reference is None: reference = keys
                     self.assertEqual(reference, keys)
                     metrics = json.loads((output / 'metrics.json').read_text())
-                    self.assertEqual(metrics['metadata']['n_cycles'], dict(dev=48, test=16))
-                    self.assertEqual(metrics['metadata']['scaling']['n_samples_seen_'], 48)
+                    self.assertEqual(metrics['metadata']['n_cycles'], dict(dev=144, test=48))
+                    self.assertEqual(metrics['metadata']['scaling']['n_samples_seen_'], 144)
                     self.assertEqual(metrics['metadata']['original_unit_split']['train'], saved['run_metadata']['train_units'])
                     frame = pd.read_csv(output / 'scores.csv', float_precision='round_trip')
                     model = build_model(saved, saved['model']).eval()
                     model.load_state_dict(cp['model_state_dict'])
-                    pred = predict_cycles(model, dev, batch_size=saved['evaluation']['batch_size'])
+                    pred = predict_cycles(model, dev, batch_size=saved['evaluation']['batch_size'],
+                                          residual_state=cp.get('residual_state'))
                     np.testing.assert_array_equal(pred.score, frame[frame.split == 'dev'].score)
                     for split in ('dev', 'test'):
                         recomputed = evaluate_all(frame[frame.split == split], random_state=42)
@@ -86,6 +91,26 @@ class ExperimentSmoke(unittest.TestCase):
                     history = pd.read_csv(output / 'history.csv')
                     self.assertTrue((history.optimizer_steps == 1).all())
                     self.assertTrue((history.seconds > 0).all())
+                    if name.startswith('residual_'):
+                        state = cp['residual_state']
+                        self.assertEqual(state['fit_keys'], [list(k) for k in dev.samples])
+                        self.assertEqual(state['n_samples_seen'], 144)
+                        self.assertEqual(state['fit_split'], 'dev')
+                        eligible = [list(k) for k in train.samples if k[1] <= 20]
+                        self.assertEqual(saved['run_metadata']['eligible_training_keys'], eligible)
+                        drawn = saved['run_metadata']['last_epoch_training_keys']
+                        self.assertEqual(len(drawn), 7)
+                        self.assertTrue(all(k in eligible for k in drawn))
+                        self.assertTrue(set(u for u, _ in drawn).isdisjoint(u for u, _ in val.samples))
+                        self.assertEqual(history.samples_drawn.iloc[0], 7)
+                        self.assertNotIn('kl_i', history)
+                        self.assertNotIn('hsic', history)
+                        # Independent evaluation reloads saved PCA, never fits on test.
+                        from unittest.mock import patch
+                        with patch('models.residual.PCA.fit', side_effect=AssertionError('unexpected refit')):
+                            again = run_evaluation(str(output / 'config.yaml'), str(output / 'best.pt'),
+                                                   str(root / f'{name}_reeval'), 'cpu', save_plots=False)
+                        self.assertEqual((again / 'scores.csv').read_bytes(), (output / 'scores.csv').read_bytes())
                     if name == 'proposal_cnn_c':
                         self.assertNotIn('kl_i', history)
                         self.assertNotIn('hsic', history)

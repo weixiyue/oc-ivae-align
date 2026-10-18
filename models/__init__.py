@@ -7,6 +7,7 @@ from torch import nn
 from models.oc_ivae import OC_iVAE
 from models.ocald import OCALD
 from models.proposal_cnn import ProposalCNN
+from models.residual import ResidualModel
 from models.vae import build_cvae_model, build_vae_model
 
 
@@ -24,6 +25,8 @@ def build_model(raw_config: dict[str, Any], model_config: dict[str, Any]) -> nn.
         return OCALD(model_config)
     if model_type == 'proposal_cnn':
         return ProposalCNN(model_config)
+    if model_type == 'residual':
+        return ResidualModel(model_config)
     if model_type != 'oc_ivae':
         raise ValueError(f'unknown model_type: {model_type}')
     baseline_type = raw_config.get("experiment", {}).get("baseline_type") or None

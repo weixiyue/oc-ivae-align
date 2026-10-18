@@ -22,6 +22,7 @@ from dataset import NCMAPSSDataset
 from models import build_model
 from models.ocald import OCALD
 from models.proposal_cnn import ProposalCNN
+from models.residual import ResidualModel, residual_scores
 from models.tcn import W_SUMMARY_DIM
 from utils.metrics import evaluate_all
 
@@ -122,6 +123,9 @@ def run_evaluation(
     if model_type == 'oc_ivae' and saved_switch != configured_switch:
         raise ValueError('checkpoint decoder_use_W_summary does not match evaluation config')
     model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+    residual_state = checkpoint['residual_state'] if model_type == 'residual' else None
+    if residual_state is not None and residual_state['fit_keys'] != [list(k) for k in dev_dataset.samples]:
+        raise ValueError('checkpoint PCA fit keys differ from complete dev flights')
     frames: dict[str, pd.DataFrame] = {}
     reference_meta: dict[str, dict[str, Any]] = {}
     for split, dataset in [('dev', dev_dataset), ('test', test_dataset)]:
@@ -129,7 +133,8 @@ def run_evaluation(
         path = _resolve_cycle_hi_path(flat, h5_path, split)
         ref, provenance = read_reference(path, rul)
         frames[split] = associate(predict_cycles(
-            model, dataset, device=device, batch_size=raw.get('evaluation', {}).get('batch_size', 64)), rul, ref)
+            model, dataset, device=device, batch_size=raw.get('evaluation', {}).get('batch_size', 64),
+            residual_state=residual_state), rul, ref)
         reference_meta[split] = dict(
             path=path, key_provenance=provenance,
             original_Y_constant_within_flight=True,
@@ -197,6 +202,14 @@ def run_evaluation(
                         score='-score(mu_I), deterministic posterior mean' if model_type == 'ocald'
                         else 'Proposal-C scalar Z, no sign conversion',
                         selection=checkpoint['selection'], stage=checkpoint['stage'])
+    if model_type == 'residual':
+        metadata.update(
+            score='oriented PCA of time-first absolute residuals including padding',
+            reference_path='CMAPSS/02_train_evaluate.ipynb -> train_and_evaluate_residual_model',
+            healthy_network_prior='train units only, cycle<=20; no HI/RUL filtering',
+            residual_pca={key: value for key, value in residual_state.items()
+                          if key not in ('mean', 'components', 'explained_variance')},
+        )
     predictions = pd.concat([dev, test], ignore_index=True)
     predictions[['split', 'unit', 'cycle', 'score', 'hi', 'hi_gt', 'rul']].to_csv(
         destination / 'scores.csv', index=False,
@@ -223,8 +236,9 @@ def predict_cycles(
     dataset: NCMAPSSDataset,
     device: str = 'cpu',
     batch_size: int = 64,
+    *, residual_state: dict | None = None,
 ) -> pd.DataFrame:
-    """Collect deterministic posterior-mean scores keyed by unit and cycle.
+    """Collect deterministic model scores keyed by unit and cycle.
 
     Args:
         model: Trained OC-iVAE or an existing baseline.
@@ -234,6 +248,13 @@ def predict_cycles(
     Returns:
         Sorted unit/cycle/score rows; reference labels are read separately.
     """
+    if isinstance(model, ResidualModel):
+        if residual_state is None:
+            raise ValueError('residual scoring requires saved dev PCA and direction state')
+        residuals = predict_residuals(model, dataset, device, batch_size)
+        scores = residual_scores(residuals, residual_state)
+        return pd.DataFrame(dataset.samples, columns=['unit', 'cycle']).assign(score=scores).sort_values(
+            ['unit', 'cycle']).reset_index(drop=True)
     model.to(torch.device(device))
     model.eval()
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -251,6 +272,21 @@ def predict_cycles(
             rows.extend(zip(unit_id.tolist(), cycle_id.tolist(), scores.cpu().tolist(), strict=True))
     return pd.DataFrame(rows, columns=['unit', 'cycle', 'score']).sort_values(
         ['unit', 'cycle']).reset_index(drop=True)
+
+
+def predict_residuals(model: ResidualModel, dataset: NCMAPSSDataset,
+                      device: str, batch_size: int) -> np.ndarray:
+    """Infer absolute residual vectors per flight in dataset order, without masking."""
+    model.to(device).eval()
+    residuals = []
+    with torch.no_grad():
+        for x, _, _, w, _, _, _ in DataLoader(dataset, batch_size=batch_size, shuffle=False):
+            x, w = x.to(device), w.to(device)
+            residual = (model(x, w) - x).abs().reshape(len(x), -1)
+            if not torch.isfinite(residual).all():
+                raise FloatingPointError('nonfinite residual predictions')
+            residuals.append(residual.cpu().numpy())
+    return np.concatenate(residuals, axis=0)
 
 
 def validate_keys(frame: pd.DataFrame, name: str) -> None:

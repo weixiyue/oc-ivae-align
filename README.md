@@ -1,7 +1,7 @@
 # OC-iVAE
 
 使用 PyTorch 在 N-CMAPSS 上构建无 HI/RUL 标签监督的健康指标，提供 OC-iVAE、cVAE、VAE，
-以及采用 OC-iVAE 数据协议的 OCALD 和 Proposal-C CNN 适配版。
+以及采用 OC-iVAE 数据协议的 OCALD、Proposal-C CNN 和 Residual-A/B 适配版。
 原三模型使用 `train.py`，新模型使用独立实验入口；全部共用 `evaluate.py`。
 项目规范见 [AGENTS.md](AGENTS.md)，当前状态见 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)。
 
@@ -30,14 +30,16 @@ models/
     vae.py                     # 两个已有 baseline 的差异组件
     ocald.py                   # 原 8D I/C OCALD、padding 适配及模型专属损失
     proposal_cnn.py            # Proposal-C CNN 与 batch Pearson 约束
+    residual.py                # Residual-A/B、完整 dev PCA、方向及恢复变换
     __init__.py                # 显式模型选择
 utils/
     preprocess.py             # N-CMAPSS 数据处理
     losses.py                 # 重构、KL、HSIC、ranking、soft Spearman
     metrics.py                # 独立指标公式
     experiment.py             # 新实验共用的配置快照、history 与 checkpoint 保存
+    optimizers.py             # 迁移 CNN 共用的 Keras Adam 数值语义
 config/                       # 全部独立实验 YAML
-experiments/                  # 两个独立新模型训练入口及 W-summary 配对实验
+experiments/                  # 独立新模型训练入口及 W-summary 配对实验
 tests/                        # 模型数学、采样、重载与端到端合成 smoke
 data/raw/                     # 原有符号链接
 data/processed/               # 可复用的预处理 HDF5，Git 忽略
@@ -138,6 +140,8 @@ python -m experiments.run_w_summary_ablation --help
 | [ocald_joint](config/ocald_joint.yaml) | 联合 100 轮；KL 各 1、排序 10、头部 L2=1e-4 |
 | [ocald_joint_decoder_w](config/ocald_joint_decoder_w.yaml) | 同上，显式开启 decoder W 输入 |
 | [proposal_cnn_c](config/proposal_cnn_c.yaml) | CNN + batch Pearson C；Adam 1e-4、batch 20、50 轮 |
+| [residual_a](config/residual_a.yaml) | X/W 重构；健康段 MAE、Adam 1e-4、batch 512、20 轮 |
+| [residual_b](config/residual_b.yaml) | 仅 W 预测 X；健康段 MAE、Adam 1e-4、batch 512、20 轮 |
 
 实际迁移来源固定为 [kgld 4f9e53cd3623b5cf0311d594fd7efcd4bec88206](https://github.com/weixiyue/kgld/tree/4f9e53cd3623b5cf0311d594fd7efcd4bec88206)
 的 model.py、losses.py、train.py 与对应三份配置，以及
@@ -176,6 +180,31 @@ OCALD 仅取各训练设备前 8 个 flight；公共 scaler 和六指标始终�
 checkpoint 包含模型类型、阶段、完整实际配置、seed 和预处理出处。
 重评使用运行快照，结构/数据不一致的外部配置会报错，其余设置优先使用 checkpoint 保存配置。
 每轮 history 记录真实损失项、权重、优化步数、抽取样本数和耗时；CNN 不记录伪造的 KL/HSIC。
+
+Residual-A/B 来自同一 UnsupervisedHI commit `157ebfae7baeee1e0cd52180f8e58ead3dcb448e` 的
+`CMAPSS/02_train_evaluate.ipynb` 和 `train_and_evaluate_residual_model`，采用公共 OC-iVAE 输入协议。
+A 为 concat(X,W)→4×Conv64/kernel11/tanh→逐时刻 Dense14；B 为 W→4×Conv64/kernel11/ReLU→Conv14/kernel11。
+Glorot uniform/零偏置、Keras Adam 数值约定与 Proposal-C 共用 `utils/optimizers.py`。
+仅 train 设备 cycle<=20 用于网络更新，不使用 hs/HI/RUL；样本级 shuffle，unmasked 平均 MAE，
+默认 batch512、lr1e-4、20 轮、seed42，保存最后轮，无调度/早停或其他损失。
+
+完整 dev 的绝对残差按时间优先展平（包含公共 padding），拟合 sklearn 单分量 PCA；
+以各 dev 设备前10减后10周期均值的跨设备平均差确定统一方向，负差时翻转。
+test 仅复用 PCA/方向；随后共用完整 dev 全局 Min–Max 和六指标，无窗口聚合、平滑或裁剪。
+PCA 使用 auto solver、显式 random_state=42；训练阶段的健康段先验与 PCA 的完整 dev 拟合集合分别记录。
+`best.pt` 保存网络、完整配置、数值 PCA 参数、方向、拟合键及预处理来源，重评不重新拟合 PCA。
+
+```bash
+python -m experiments.train_residual --config config/residual_a.yaml \
+  --run-dir runs/residual_a_seed42 --device cuda --threads 2
+python -m experiments.train_residual --config config/residual_b.yaml \
+  --run-dir runs/residual_b_seed42 --device cuda --threads 2
+python evaluate.py --config runs/residual_a_seed42/config.yaml \
+  --output-dir runs/residual_a_seed42/reevaluation --device cuda --threads 2
+```
+
+Residual 入口默认 CPU；CPU 轻量检查可用 `--device cpu --smoke`，只做1轮、最多1个健康段 batch，
+PCA、scaler 和评价仍读取完整 dev/test。需要新 run 目录，拒绝覆盖既有结果。
 
 既有 W-summary 配对实验命令：
 
@@ -250,7 +279,7 @@ checkpoint 保存 state_dict 字典。新文件保留已有参数 keys 和保存
 PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
 ```
 
-本次 8 项测试通过，包含四份配置的 CPU CLI smoke、保存重载、冻结/联合梯度、
+此前迁移的 8 项测试通过，包含四份配置的 CPU CLI smoke、保存重载、冻结/联合梯度、
 卷积/Flatten/损失及 Adam 独立公式对照、完整 dev 缩放与六指标/CSV 检查。
 smoke 在测试创建的合成数据上自动加 --smoke 执行两个入口；临时配置、数据、权重和输出由 TemporaryDirectory 清理。
 另对照固定 kgld commit：三份 OCALD 的初始化、随机前向、损失、参数梯度及联合配对序列完全一致；
@@ -259,6 +288,13 @@ smoke 在测试创建的合成数据上自动加 --smoke 执行两个入口；�
 
 W-summary 配对脚本在运行时检查配置、共享初始权重和共同训练 epochs 的 batch/RNG/学习率摘要，
 摘要保存在 history 和配置中。不再提供独立 verify 命令，也不依赖旧 Git revision 或历史 checkpoint。
+2026-10-18 Residual 接入验证：10 项 unittest 通过，包含六份配置的独立 CPU CLI smoke。
+合成数据含每设备24个周期；Residual 每次仅更新7条健康段样本，但 PCA/scaler 使用全部144条 dev，
+test 为48条；验证更新键、输入路径、独立卷积/MAE及梯度、展平、sklearn PCA/方向、保存重载及六指标。
+smoke 命令由 `tests/test_experiment_smoke.py` 使用上述训练命令加 `--device cpu --smoke` 执行；
+旧 OC-iVAE DS03 checkpoint 的1101条 flight 在本次修改前后重评，scores、metrics、两张曲线逐字节一致。
+测试临时数据/配置/权重/曲线自动清理。未运行完整20轮或 TensorFlow/GPU 对照。
+
 历史审计报告保留原有记录；新实验不生成额外的历史对照或验证目录。
 
 CUDA 配对实验须在启动 Python 前设置确定性计算环境变量：

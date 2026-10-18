@@ -1,4 +1,4 @@
-"""Run snapshots and state-dict outputs shared by the two migrated experiments."""
+"""Run snapshots and state-dict outputs shared by migrated experiments."""
 from __future__ import annotations
 
 import copy
@@ -78,13 +78,16 @@ def append_history(output: Path, row: dict, *, first: bool) -> None:
 
 def save_experiment_checkpoint(path: Path, model: torch.nn.Module,
                                optimizer: torch.optim.Optimizer, config: dict,
-                               stage: str, epoch: int) -> None:
+                               stage: str, epoch: int, *, residual_state: dict | None = None) -> None:
     """Store complete actual settings; 'best.pt' deliberately selects the last epoch."""
-    torch.save(dict(
+    checkpoint = dict(
         model_state_dict=model.state_dict(), optimizer_state_dict=optimizer.state_dict(),
         config=copy.deepcopy(config), model_config=copy.deepcopy(config['model']),
         model_type=config['model_type'], stage=stage, epoch=epoch,
         selection='last_epoch', seed=config['training']['seed'],
         processed_data=config['run_metadata']['processed_data'],
         run_metadata=copy.deepcopy(config['run_metadata']),
-    ), path)
+    )
+    if residual_state is not None:
+        checkpoint['residual_state'] = residual_state
+    torch.save(checkpoint, path)

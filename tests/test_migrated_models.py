@@ -1,4 +1,4 @@
-"""Focused mathematical and protocol checks for the two migrated models.
+"""Focused mathematical and protocol checks for migrated models.
 
 Run: PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
 """
@@ -14,11 +14,13 @@ from torch.nn import functional as F
 import yaml
 
 from dataset import ShuffledSequentialBatches, ocald_joint_schedule
-from evaluate import scale_dev_test
-from experiments.train_proposal_cnn import KerasAdam
+from evaluate import scale_dev_test, predict_residuals
+from utils.optimizers import KerasAdam
 from models import build_model
 from models.ocald import OCALD, freeze_representation, time_positions, to_valid_prefix, training_loss
 from models.proposal_cnn import ProposalCNN, proposal_loss
+from models.residual import ResidualModel, fit_residual_pca, residual_scores
+from sklearn.decomposition import PCA
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -151,6 +153,86 @@ class MigratedModels(unittest.TestCase):
         np.testing.assert_array_equal(a.hi, [0, .5, 1])
         np.testing.assert_array_equal(b.hi, [-.5, 2.])
         self.assertEqual(meta['fit_split'], 'dev')
+
+    def test_residual_paths_mae_and_gradients(self):
+        torch.manual_seed(19)
+        for variant in ('a', 'b'):
+            with self.subTest(variant=variant):
+                model = ResidualModel(config(f'residual_{variant}')['model']).double()
+                for layer in model.modules():
+                    if isinstance(layer, (torch.nn.Conv1d, torch.nn.Linear)):
+                        self.assertEqual(layer.bias.count_nonzero(), 0)
+                        fan_in, fan_out = torch.nn.init._calculate_fan_in_and_fan_out(layer.weight)
+                        self.assertLessEqual(layer.weight.abs().max(), (6 / (fan_in + fan_out)) ** .5)
+                reference = copy.deepcopy(model)
+                x = torch.randn(2, 5, 14, dtype=torch.double, requires_grad=True)
+                w = torch.randn(2, 5, 4, dtype=torch.double, requires_grad=True)
+                x.data[:, :2] = 0  # common left padding still contributes to MAE
+                output = model(x, w)
+                h = torch.cat((x, w), -1) if variant == 'a' else w
+                for layer in reference.convolutions:
+                    if isinstance(layer, torch.nn.Conv1d):
+                        h = reference_conv(layer, h)
+                    else:
+                        h = h.tanh() if variant == 'a' else h.relu()
+                expected = (F.linear(h, reference.output.weight, reference.output.bias)
+                            if variant == 'a' else reference_conv(reference.output, h))
+                self.assertEqual(output.shape, x.shape)
+                torch.testing.assert_close(output, expected, rtol=1e-10, atol=1e-12)
+                if variant == 'b':
+                    torch.testing.assert_close(output, model(x.detach() + 99, w), rtol=0, atol=0)
+                    self.assertIsNone(torch.autograd.grad(output.sum(), x, allow_unused=True)[0])
+                else:
+                    self.assertGreater(torch.autograd.grad(output.sum(), x, retain_graph=True)[0].abs().sum(), 0)
+                self.assertGreater(torch.autograd.grad(output.sum(), w, retain_graph=True)[0].abs().sum(), 0)
+                loss = (output - x).abs().mean()
+                expected_loss = (expected - x).abs().sum() / x.numel()
+                torch.testing.assert_close(loss, expected_loss)
+                self.assertGreater((output[:, :2] - x[:, :2]).abs().sum(), 0)
+                loss.backward(); expected_loss.backward()
+                for p, q in zip(model.parameters(), reference.parameters()):
+                    torch.testing.assert_close(p.grad, q.grad, rtol=1e-8, atol=1e-10)
+
+    def test_residual_flatten_pca_and_direction(self):
+        # A minimal seven-field fixture checks actual inference, not a second flatten helper.
+        x = torch.arange(2 * 3 * 14, dtype=torch.float32).reshape(2, 3, 14) / 50
+        w = torch.ones(2, 3, 4)
+        fixture = [(x[i], torch.ones(3, dtype=torch.bool), torch.zeros(11), w[i],
+                    torch.tensor(1), torch.tensor(i + 1), torch.tensor(float('nan'))) for i in range(2)]
+        model = ResidualModel(config('residual_a')['model']).eval()
+        expected = (model(x, w) - x).abs().detach().numpy().reshape(2, -1)
+        np.testing.assert_array_equal(predict_residuals(model, fixture, 'cpu', 2), expected)
+        rng = np.random.default_rng(12)
+        keys = [(u, c) for u in (2, 1) for c in range(30, 0, -1)]
+        residuals = rng.uniform(size=(60, 18)).astype(np.float32)
+        residuals[:, 0] += np.asarray([c / 3 for _, c in keys])
+        state = fit_residual_pca(residuals, keys, 42)
+        pca = PCA(n_components=1, random_state=42).fit(residuals)
+        z = pca.transform(residuals).ravel()
+        by_key = dict(zip(keys, z))
+        delta = np.mean([np.mean([by_key[u, c] for c in range(1, 11)])
+                         - np.mean([by_key[u, c] for c in range(21, 31)]) for u in (1, 2)])
+        self.assertEqual(state['direction'], -1 if delta < 0 else 1)
+        np.testing.assert_allclose(residual_scores(residuals, state), z * state['direction'], rtol=0, atol=0)
+        test = rng.uniform(20, 30, size=(5, 18)).astype(np.float32)
+        np.testing.assert_allclose(residual_scores(test, state),
+                                   pca.transform(test).ravel() * state['direction'], rtol=0, atol=0)
+        self.assertEqual(state['fit_keys'], [list(k) for k in keys])
+        wide = rng.uniform(size=(60, 600)).astype(np.float32)
+        wide_state = fit_residual_pca(wide, keys, 42)
+        self.assertEqual(wide_state['solver'], 'randomized')
+        wide_pca = PCA(n_components=1, random_state=42).fit(wide)
+        np.testing.assert_array_equal(residual_scores(wide, wide_state),
+                                      wide_pca.transform(wide).ravel() * wide_state['direction'])
+        # Reverse chronology produces the other sign; test has no role in either decision.
+        reverse_keys = [(u, 31 - c) for u, c in keys]
+        reverse = fit_residual_pca(residuals, reverse_keys, 42)
+        self.assertEqual(reverse['direction'], -state['direction'])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'pca.pt'
+            torch.save(state, path)
+            restored = torch.load(path, weights_only=False)
+            np.testing.assert_array_equal(residual_scores(test, restored), residual_scores(test, state))
 
     def test_score_direction_and_reload(self):
         torch.manual_seed(4)

@@ -1,6 +1,6 @@
 # 当前代码走读
 
-更新：2026-10-15。本文描述简化重构后的实现，旧走读保留在
+更新：2026-10-18。本文描述简化重构后的实现，旧走读保留在
 [history/CODE_WALKTHROUGH_pre_refactor.md](history/CODE_WALKTHROUGH_pre_refactor.md)。
 入口与环境准备见 [README](../README.md)。
 
@@ -13,9 +13,12 @@
 | models/tcn.py | causal encoder、masked LayerNorm、non-causal decoder、W summary |
 | models/oc_ivae.py | OC-iVAE 装配、两个 posterior、FiLM、conditional prior、HI head |
 | models/vae.py | 标准正态先验与两个 baseline 的组件替换 |
-| models/__init__.py | 原三模型及 OCALD/Proposal-C 的显式构建分支 |
+| models/__init__.py | 原三模型及 OCALD/Proposal-C/Residual 的显式构建分支 |
 | models/ocald.py | 有效前缀适配、原 GRU/MLP/HIHead、flight 求和 ELBO/排序/L2 |
 | models/proposal_cnn.py | 时间优先 Flatten 的 Proposal-C、unmasked MAE 和 batch Pearson |
+| models/residual.py | Residual-A/B、完整 dev PCA 数值状态、统一方向及恢复变换 |
+| experiments/train_residual.py | train-unit 健康段 MAE 训练、完整 dev PCA、公共评价 |
+| utils/optimizers.py | Proposal-C/Residual 共用 Keras Adam epsilon-hat 更新 |
 | utils/experiment.py | 新模型实际配置快照、history、完整 checkpoint 保存 |
 | utils/losses.py | 单项数学损失、三阶段聚合及 KL annealing |
 | train.py | 训练/验证、AdamW/LR、best selection、checkpoint、history/审计 |

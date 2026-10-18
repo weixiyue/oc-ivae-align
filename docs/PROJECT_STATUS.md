@@ -1,15 +1,15 @@
 # 当前项目状态
 
-更新：2026-10-15。以源码、独立 YAML 和运行快照为准；设计和历史审计不覆盖当前 AGENTS.md。
+更新：2026-10-18。以源码、独立 YAML 和运行快照为准；设计和历史审计不覆盖当前 AGENTS.md。
 当前使用命令见 [README](../README.md)，实现说明见 [代码走读](CODE_WALKTHROUGH.md)。
 
 ## 已完成的结构重构
 
-- 原三模型的计算与 checkpoint keys 保持；新增 ocald.py/proposal_cnn.py 独立实现。
+- 原三模型的计算与 checkpoint keys 保持；新增 ocald.py/proposal_cnn.py/residual.py 独立实现。
 - train.py 使用普通函数，CLI 与配对实验共用训练循环；没有 Trainer 继承层。
 - evaluate.py 直接处理 cycle 分数表，独立 metrics.py 保留六项指标公式。
 - dataset.py 合并数据加载/取样，utils/preprocess.py 保留 N-CMAPSS 处理。
-- 原十份 YAML 内容不变；config/ 新增四份完整独立配置，实验入口位于 experiments/。
+- 原十份 YAML 内容不变；config/ 新增 OCALD/Proposal-C 四份及 Residual 两份完整独立配置，实验入口位于 experiments/。
 - 新运行使用独立 runs 目录，记录配置、best.pt、history、scores 和评估出处。
 - 此前按批准删除旧 tests/、test.py 和空目录；本次新增迁移模型的永久数学与 smoke 测试。
 
@@ -79,3 +79,9 @@ history、最佳权重、optimizer 状态、scores、scaler、指标、对比 CS
 OCALD 与固定源 commit 的前向/损失/梯度/联合采样完全一致；CNN 使用独立公式和梯度对照。
 旧 OC-iVAE 真实 DS03 的 scores、完整 metrics 和曲线均不变。所有本次临时权重、配置和输出已清理。
 无 TensorFlow/源 CNN 权重，未做跨框架逐位复现、完整预算训练或 GPU 验证。
+
+2026-10-18 新增 Residual-A/B 和独立完整配置，共用健康段训练入口、缓存与公共六指标。
+网络仅使用 train 设备 cycle<=20；PCA/方向/缩放使用完整 dev，test 只变换，状态保存可独立重载。
+10 项测试通过，包含六份配置 CPU smoke；Residual smoke 每次7条更新、144条 dev 拟合、48条 test。
+数值/梯度、sklearn PCA/方向、重载、dev-only 缩放及既有入口回归通过。无完整训练或 TensorFlow/GPU 对照。
+本次临时数据、配置、权重和结果自动清理；命令与限制见 README。

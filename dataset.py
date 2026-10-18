@@ -324,3 +324,13 @@ class ShuffledSequentialBatches(Sampler[list[int]]):
 
     def __len__(self) -> int:
         return len(self.batches)
+
+
+def healthy_training_indices(dataset: NCMAPSSDataset, cycle_threshold: int = 20) -> list[int]:
+    """Select the reference healthy prefix from train units using cycle keys only."""
+    if dataset.split != 'train' or dataset.val_fraction == 0:
+        raise ValueError('healthy network fitting requires the held-out-unit training split')
+    indices = [i for i, (_, cycle) in enumerate(dataset.samples) if cycle <= cycle_threshold]
+    if not indices:
+        raise ValueError('no training flights satisfy the healthy cycle threshold')
+    return indices
