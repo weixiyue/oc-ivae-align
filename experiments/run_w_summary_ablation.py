@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from dataset import NCMAPSSDataset, UnitStratifiedSampler
 from evaluate import run_evaluation, _resolve_main_h5_path
-from models.oc_ivae import OC_iVAE
+from models.kgld import KGLD
 from train import state_digest, train_model
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -64,7 +64,7 @@ def run_pair(output: Path, device: str) -> None:
         'false': 'exp_tuning_mono_weight_no_w_summary_seed42',
     }
     configs = {
-        role: yaml.safe_load((PROJECT_ROOT / f'config/{name}.yaml').read_text())
+        role: yaml.safe_load((PROJECT_ROOT / f'config/history/{name}.yaml').read_text())
         for role, name in names.items()
     }
     off_copy = copy.deepcopy(configs['false'])
@@ -72,7 +72,7 @@ def run_pair(output: Path, device: str) -> None:
     if configs['true'] != off_copy:
         raise ValueError('paired configs differ beyond W-summary switch')
     baseline = yaml.safe_load(
-        (PROJECT_ROOT / 'config/exp_tuning_mono_weight.yaml').read_text(),
+        (PROJECT_ROOT / 'config/history/exp_tuning_mono_weight.yaml').read_text(),
     )
     baseline['experiment'] = dict(seed=42, paired_w_summary_ablation=True)
     if configs['true'] != baseline:
@@ -94,7 +94,7 @@ def run_pair(output: Path, device: str) -> None:
     )
     model_cfg = dict(configs['true']['model'], in_features=int(train[0][0].shape[-1]))
     seed_training(42)
-    initial = OC_iVAE(model_cfg)
+    initial = KGLD(model_cfg)
     shared_state = {key: value.detach().clone().cpu()
                     for key, value in initial.state_dict().items()}
     initial_digest = state_digest(shared_state)
@@ -118,7 +118,7 @@ def run_pair(output: Path, device: str) -> None:
             sampler_seed=42, num_workers=0, processed_data=str(train.processed_path),
         )
         seed_training(42)
-        model = OC_iVAE(config['model'])
+        model = KGLD(config['model'])
         model.load_state_dict(shared_state)
         if state_digest(model.state_dict()) != initial_digest:
             raise RuntimeError('paired initial weights differ')

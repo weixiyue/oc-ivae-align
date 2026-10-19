@@ -5,7 +5,7 @@ source:
   files:
   - CMAPSS/03_train_evaluate_proposals.ipynb
   - CMAPSS/eval_utils.py
-  adaptation: PyTorch; OC-iVAE data protocol; source training signature comma corrected;
+  adaptation: PyTorch; KGLD data protocol; source training signature comma corrected;
     shared evaluation
 data:
   h5_path: data/raw/N-CMAPSS_DS03-012.h5

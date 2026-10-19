@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 
 from dataset import NCMAPSSDataset
 from evaluate import validate_keys
-from models.oc_ivae import OC_iVAE
+from models.kgld import KGLD
 from models.ocald import OCALD, to_valid_prefix
 from models.proposal_cnn import ProposalCNN
 
@@ -37,10 +37,10 @@ def extract_representations(model: torch.nn.Module, dataset: NCMAPSSDataset,
                 vector = model.encode(x, mask)[0]  # mu_I only, no condition block
             elif isinstance(model, ProposalCNN):
                 vector = model.encode(x)[:, None]
-            elif isinstance(model, OC_iVAE):
+            elif isinstance(model, KGLD):
                 vector = model.zd_branch(model.backbone(x, mask), mask)[0]  # mu_d
             else:
-                raise ValueError('linear probes support OC-iVAE, OCALD and Proposal-C only')
+                raise ValueError('linear probes support KGLD, OCALD and Proposal-C only')
             if vector.ndim != 2 or not torch.isfinite(vector).all():
                 raise ValueError('expected one finite representation vector per flight')
             keys.extend(zip(units.tolist(), cycles.tolist(), strict=True))

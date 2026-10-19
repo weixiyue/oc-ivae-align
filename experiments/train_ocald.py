@@ -1,4 +1,4 @@
-"""Train the original/global OCALD under the shared OC-iVAE data protocol."""
+"""Train the original/global OCALD under the shared KGLD data protocol."""
 from __future__ import annotations
 
 import argparse

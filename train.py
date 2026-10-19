@@ -1,4 +1,4 @@
-"""Direct training workflow shared by OC-iVAE and the existing VAE baselines."""
+"""Direct training workflow shared by KGLD and the existing VAE baselines."""
 from __future__ import annotations
 
 import argparse
@@ -20,14 +20,14 @@ from torch.utils.data import DataLoader
 
 from dataset import NCMAPSSDataset, UnitStratifiedSampler
 from evaluate import run_evaluation
-from models import build_model
-from models.oc_ivae import OC_iVAE
+from models import build_model, get_model_type
+from models.kgld import KGLD
 from models.tcn import W_SUMMARY_DIM
 from utils.losses import compute_total_loss, masked_recon_loss
 
 
 def train_model(
-    model: OC_iVAE,
+    model: KGLD,
     train_loader: DataLoader,
     val_loader: DataLoader,
     config: dict[str, Any],
@@ -39,7 +39,7 @@ def train_model(
     """Train, validate and select the strict minimum reconstruction checkpoint.
 
     Args:
-        model: OC-iVAE or an existing baseline with the common forward interface.
+        model: KGLD or an existing baseline with the common forward interface.
         train_loader: Unit-stratified cycle batches.
         val_loader: Validation batches, excluded from parameter updates.
         config: Nested experiment configuration or flat training/loss settings.
@@ -148,7 +148,7 @@ def train_model(
 
 
 def train_epoch(
-    model: OC_iVAE,
+    model: KGLD,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     epoch: int,
@@ -158,7 +158,7 @@ def train_epoch(
     """Update parameters for one epoch and average losses equally over batches.
 
     Args:
-        model: Model with the common OC-iVAE forward fields.
+        model: Model with the common KGLD forward fields.
         loader: Training cycle batches.
         optimizer: Optimizer owning the model parameters.
         epoch: Zero-indexed loss schedule epoch.
@@ -201,7 +201,7 @@ def train_epoch(
     return {key: value / n_batches for key, value in loss_sums.items()}
 
 
-def validate(model: OC_iVAE, loader: DataLoader, epoch: int,
+def validate(model: KGLD, loader: DataLoader, epoch: int,
              device: torch.device) -> float:
     """Average masked validation reconstruction loss equally over batches.
 
@@ -232,7 +232,7 @@ def validate(model: OC_iVAE, loader: DataLoader, epoch: int,
 
 def save_checkpoint(
     path: str | Path,
-    model: OC_iVAE,
+    model: KGLD,
     optimizer: torch.optim.Optimizer,
     config: dict[str, Any],
     epoch: int,
@@ -261,7 +261,7 @@ def save_checkpoint(
     ), path)
 
 
-def load_checkpoint(path: str | Path, model: OC_iVAE,
+def load_checkpoint(path: str | Path, model: KGLD,
                     optimizer: torch.optim.Optimizer, device: str = 'cpu') -> dict[str, Any]:
     """Restore model and optimizer with the existing W-summary compatibility check.
 
@@ -323,8 +323,8 @@ def _training_config(config: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     """Load an experiment, train its model, evaluate the best checkpoint and log it."""
-    parser = argparse.ArgumentParser(description='Train OC-iVAE or a VAE baseline on N-CMAPSS.')
-    parser.add_argument('--config', default='config/ds03_default.yaml')
+    parser = argparse.ArgumentParser(description='Train KGLD or a VAE baseline on N-CMAPSS.')
+    parser.add_argument('--config', default='config/kgld.yaml')
     parser.add_argument('--run-dir', type=Path, help='New run directory; existing paths are rejected')
     args = parser.parse_args()
     config_path = Path(args.config)
@@ -332,7 +332,7 @@ def main() -> None:
         config = yaml.safe_load(file)
     if not isinstance(config, dict):
         raise ValueError('config file must contain a YAML mapping')
-    if config.get('model_type', 'oc_ivae') != 'oc_ivae':
+    if get_model_type(config) != 'kgld':
         raise ValueError('use experiments.train_ocald or experiments.train_proposal_cnn for migrated models')
     for section in ('data', 'training', 'model'):
         if not isinstance(config.get(section), dict):

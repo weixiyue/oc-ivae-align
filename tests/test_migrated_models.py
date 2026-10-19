@@ -26,7 +26,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def config(name):
-    return yaml.safe_load((ROOT / f'config/{name}.yaml').read_text())
+    path = ROOT / f'config/history/{name}.yaml'
+    if name == 'ds03_default':
+        path = ROOT / 'config/kgld.yaml'
+    elif name == 'proposal_cnn_c':
+        path = ROOT / 'config/proposal_cnn_c.yaml'
+    return yaml.safe_load(path.read_text())
 
 
 def reference_conv(layer, x):
@@ -44,6 +49,30 @@ class MigratedModels(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(2)
+
+    def test_kgld_loads_saved_legacy_model_type(self):
+        from evaluate import read_evaluation_checkpoint, load_evaluation_model
+        from models.kgld import KGLD
+        raw = config('ds03_default')
+        raw['model']['in_features'] = 14
+        raw['model'].update(c_hidden=4, n_backbone_layers=1, n_decoder_layers=1)
+        source = KGLD(raw['model']).eval()
+        legacy = copy.deepcopy(raw)
+        legacy['model_type'] = 'oc_ivae'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / 'legacy.pt'
+            torch.save(dict(config=legacy, model_type='oc_ivae', model_state_dict=source.state_dict()), checkpoint)
+            requested = root / 'kgld.yaml'
+            requested.write_text(yaml.safe_dump(raw))
+            resolved, flat, saved, _, _ = read_evaluation_checkpoint(str(requested), str(checkpoint), 'cpu')
+            x, w = torch.randn(2, 6, 14), torch.randn(2, 6, 4)
+            mask, u = torch.ones(2, 6, dtype=torch.bool), torch.zeros(2, 11)
+            loaded = load_evaluation_model(resolved, flat, saved, [(x[0],)]).eval()
+            self.assertIsInstance(loaded, KGLD)
+            before, after = source(x, mask, u, w), loaded(x, mask, u, w)
+            for key in before:
+                torch.testing.assert_close(before[key], after[key], rtol=0, atol=0)
 
     def test_prefix_preserves_valid_values_and_time(self):
         x = torch.arange(2 * 5 * 14, dtype=torch.float64).reshape(2, 5, 14).requires_grad_()

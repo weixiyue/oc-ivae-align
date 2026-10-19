@@ -1,4 +1,4 @@
-"""OC-iVAE and its latent branches, conditional prior and health head."""
+"""KGLD and its latent branches, conditional prior and health head."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ _BRANCH_KERNEL_SIZE = 3
 _BRANCH_DILATION = 1
 
 
-class OC_iVAE(nn.Module):
+class KGLD(nn.Module):
     """Operating Condition-aware identifiable VAE for HI construction."""
 
     def __init__(self, config: dict) -> None:
-        """Initialize all OC-iVAE submodules.
+        """Initialize all KGLD submodules.
 
         Args:
             config: Model config with backbone, latent, prior, and decoder
@@ -53,7 +53,7 @@ class OC_iVAE(nn.Module):
         u: Tensor,
         W_seq: Tensor,
     ) -> dict[str, Tensor]:
-        """Run OC-iVAE and return the locked intermediate-output dictionary."""
+        """Run KGLD and return the locked intermediate-output dictionary."""
         h = self.backbone(x, mask)
         mu_d, log_var_d = self.zd_branch(h, mask)
         mu_c, log_var_c = self.zc_branch(h, mask, u)

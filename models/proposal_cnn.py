@@ -1,4 +1,4 @@
-"""Proposal-C CNN from UnsupervisedHI 157ebfae, using OC-iVAE input tensors."""
+"""Proposal-C CNN from UnsupervisedHI 157ebfae, using KGLD input tensors."""
 from __future__ import annotations
 
 import torch

@@ -19,7 +19,7 @@ from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader
 
 from dataset import NCMAPSSDataset, ShortWindowDataset
-from models import build_model
+from models import build_model, get_model_type
 from models.ocald import OCALD
 from models.proposal_cnn import ProposalCNN
 from models.residual import ResidualModel, residual_scores, predict_window_flights
@@ -53,7 +53,7 @@ def read_evaluation_checkpoint(config_path: str, checkpoint_path: str | None = N
     if saved is not None:
         # New checkpoints carry the complete actual settings. External YAML must
         # agree at model/data boundaries; all other settings come from the save.
-        if requested.get('model_type', 'oc_ivae') != checkpoint['model_type']:
+        if get_model_type(requested) != get_model_type(checkpoint):
             raise ValueError('external model_type differs from saved checkpoint')
         if requested['model'] != saved['model']:
             raise ValueError('external model structure differs; use the saved run/config.yaml')
@@ -80,9 +80,9 @@ def read_evaluation_checkpoint(config_path: str, checkpoint_path: str | None = N
 def load_evaluation_model(raw: dict, flat: dict, checkpoint: dict,
                           dataset: NCMAPSSDataset | ShortWindowDataset) -> torch.nn.Module:
     """Validate checkpoint/input compatibility and strictly restore network weights."""
-    model_type = raw.get('model_type', 'oc_ivae')
+    model_type = get_model_type(raw)
     in_features = int(dataset[0][0].shape[-1])
-    if model_type != 'oc_ivae':
+    if model_type != 'kgld':
         if in_features != raw['model']['in_features']:
             raise ValueError('checkpoint feature dimension differs from prepared data')
         if checkpoint.get('config') is not None and str(dataset.processed_path) != checkpoint['processed_data']:
@@ -93,7 +93,7 @@ def load_evaluation_model(raw: dict, flat: dict, checkpoint: dict,
     model = build_model(raw, flat)
     saved_switch = checkpoint.get('decoder_use_W_summary', True)
     configured_switch = flat.get('decoder_use_W_summary', True)
-    if model_type == 'oc_ivae' and saved_switch != configured_switch:
+    if model_type == 'kgld' and saved_switch != configured_switch:
         raise ValueError('checkpoint decoder_use_W_summary does not match evaluation config')
     model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
     return model
@@ -122,7 +122,7 @@ def run_evaluation(
         config_path, checkpoint_path, device)
     data_config = raw['data']
     exp_name = Path(config_path).stem
-    model_type = raw.get('model_type', 'oc_ivae')
+    model_type = get_model_type(raw)
     existing_run = output_dir is not None and Path(output_dir).exists()
     if existing_run:
         destination = Path(output_dir)
@@ -219,7 +219,7 @@ def run_evaluation(
         ignored_legacy_config={'postprocess': raw.get('postprocess')},
         config=raw, resolved_model_data_config=flat, resolved_h5_path=h5_path,
     )
-    if model_type != 'oc_ivae':
+    if model_type != 'kgld':
         metadata.pop('decoder_use_W_summary')
         metadata.update(model_type=model_type, source=raw['source'],
                         score='-score(mu_I), deterministic posterior mean' if model_type == 'ocald'
@@ -235,7 +235,7 @@ def run_evaluation(
         )
     if window_mode:
         metadata.update(
-            input_preprocessing='short windows with OC-iVAE normalization; not full source-paper protocol',
+            input_preprocessing='short windows with KGLD normalization; not full source-paper protocol',
             score='window absolute residual -> dev PCA -> dev direction -> mean per flight',
             window_length=dev_dataset.window_length, stride=dev_dataset.stride,
             n_windows=dict(dev=len(dev_dataset), test=len(test_dataset)),
@@ -273,7 +273,7 @@ def predict_cycles(
     """Collect deterministic model scores keyed by unit and cycle.
 
     Args:
-        model: Trained OC-iVAE or an existing baseline.
+        model: Trained KGLD or an existing baseline.
         dataset: Dataset providing the seven-field cycle samples.
         device: Inference device.
         batch_size: Inference batch size; never changes the evaluated flight set.

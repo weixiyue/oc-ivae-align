@@ -44,7 +44,7 @@ class ExperimentSmoke(unittest.TestCase):
             reference = None
             for name in ('ocald_original', 'ocald_joint', 'ocald_joint_decoder_w', 'proposal_cnn_c', 'residual_a', 'residual_b'):
                 with self.subTest(name=name):
-                    config = yaml.safe_load((ROOT / f'config/{name}.yaml').read_text())
+                    config = yaml.safe_load((ROOT / ('config/proposal_cnn_c.yaml' if name == 'proposal_cnn_c' else f'config/history/{name}.yaml')).read_text())
                     config['data'].update(h5_path=str(raw), downsample_factor=2,
                         cycle_hi_path=str(root / 'cycle_dev.h5'), test_cycle_hi_path=str(root / 'cycle_test.h5'),
                         processed_dir=str(root / 'processed'))

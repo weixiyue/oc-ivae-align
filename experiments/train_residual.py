@@ -40,14 +40,14 @@ def run(config_path: str, run_dir: str | None, device: str, smoke: bool = False)
         healthy_network_prior='train units cycle<=20; no HI/RUL/hs filtering',
         eligible_training_keys=[list(key) for key in healthy_keys],
         pca_fit_split='complete dev (train union val), independent of healthy network subset',
-        input_protocol='shared OC-iVAE cached normalization/left padding; differs from source notebook',
+        input_protocol='shared KGLD cached normalization/left padding; differs from source notebook',
     )
     healthy_flights = len(healthy_keys)
     config['run_metadata'].update(healthy_flights=healthy_flights,
         eligible_training_samples=len(indices), input_mode='short_window' if window_mode else 'flight')
     if window_mode:
         config['run_metadata'].update(
-            input_protocol='OC-iVAE normalization; full effective sequences before truncation/padding',
+            input_protocol='KGLD normalization; full effective sequences before truncation/padding',
             pca_fit_split='all dev windows, including validation units; no network updates on validation',
             training_key_record='first 16 updated windows of last epoch (unit,cycle,start)')
     save_config(output, config)

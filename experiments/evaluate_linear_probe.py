@@ -12,6 +12,7 @@ import torch
 import yaml
 
 from dataset import NCMAPSSDataset
+from models import get_model_type
 from evaluate import (PROTOCOL_VERSION, _resolve_cycle_hi_path, _resolve_main_h5_path,
                       associate, load_evaluation_model, predict_cycles, read_evaluation_checkpoint,
                       read_reference, scale_dev_test)
@@ -29,9 +30,9 @@ def run(config_path: str, checkpoint_path: str | None, output_dir: str, device: 
         raise FileExistsError(f'linear probe directory already exists: {output}')
     config, flat, checkpoint, checkpoint_file, device = read_evaluation_checkpoint(
         config_path, checkpoint_path, device)
-    model_type = config.get('model_type', 'oc_ivae')
-    if model_type not in ('oc_ivae', 'ocald', 'proposal_cnn'):
-        raise ValueError('linear probes support OC-iVAE, OCALD and Proposal-C; Residual is excluded')
+    model_type = get_model_type(config)
+    if model_type not in ('kgld', 'ocald', 'proposal_cnn'):
+        raise ValueError('linear probes support KGLD, OCALD and Proposal-C; Residual is excluded')
     if config['data'].get('input_mode', 'flight') != 'flight':
         raise ValueError('current probe adapters require one complete model input per flight')
     batch_size = batch_size if batch_size is not None else config.get('evaluation', {}).get('batch_size', 64)
@@ -70,7 +71,7 @@ def run(config_path: str, checkpoint_path: str | None, output_dir: str, device: 
     dev_features = join_probe_features(representations['dev'], dev_hi)
     test_features = join_probe_features(representations['test'], test_hi)
     predictions, metrics, parameters = fit_linear_probes(dev_features, test_features, split)
-    descriptions = dict(oc_ivae='mu_d, complete posterior mean used by HIHead',
+    descriptions = dict(kgld='mu_d, complete posterior mean used by HIHead',
                         ocald='mu_I, complete internal-block posterior mean after valid-prefix adaptation',
                         proposal_cnn='one-dimensional Proposal-C Z')
     metadata = dict(
@@ -84,7 +85,7 @@ def run(config_path: str, checkpoint_path: str | None, output_dir: str, device: 
         reference_method=dict(repository='https://github.com/EPFL-IMOS/hcde', commit=HCDE_COMMIT,
             files=['src/train/task.py::DegradInferenceTask.get_latent_space',
                    'src/model/hcde.py::HCDE.forward', 'src/train/train.py::MappingTrainer.compute_loss'],
-            adaptation='frozen complete health representation -> labelled OLS; DS03 HI and shared OC-iVAE inputs'),
+            adaptation='frozen complete health representation -> labelled OLS; DS03 HI and shared KGLD inputs'),
         **split, split_config=None if split_config is None else str(Path(split_config).resolve()),
         fit_keys=predictions.loc[predictions.probe_split.eq('fit'), ['unit', 'cycle']].values.tolist(),
         cycle_weighting='pooled test cycles equally weighted; per-unit diagnostics do not replace pooled R2',

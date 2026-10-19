@@ -19,7 +19,7 @@ def compute_total_loss(
     """Compute staged total loss with KL annealing.
 
     Args:
-        out: Forward output dict from ``OC_iVAE``.
+        out: Forward output dict from ``KGLD``.
         x: Original input tensor with shape ``(B, T, S)``.
         mask: Valid timestep mask with shape ``(B, T)``.
         cycle_id: Cycle indices with shape ``(B,)``.

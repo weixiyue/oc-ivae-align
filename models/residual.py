@@ -1,4 +1,4 @@
-"""Residual-A/B, UnsupervisedHI 157ebfae; adapted to shared OC-iVAE tensors."""
+"""Residual-A/B, UnsupervisedHI 157ebfae; adapted to shared KGLD tensors."""
 from __future__ import annotations
 
 from contextlib import contextmanager

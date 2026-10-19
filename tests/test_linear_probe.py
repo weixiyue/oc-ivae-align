@@ -100,7 +100,9 @@ class LinearProbes(unittest.TestCase):
         fixture = [(x[i], mask[i], u[i], w[i], torch.tensor(1), torch.tensor(i + 1), torch.tensor(float('nan'))) for i in range(3)]
         for name in ('ds03_default', 'ocald_joint', 'proposal_cnn_c'):
             with self.subTest(name=name):
-                config = yaml.safe_load((ROOT / f'config/{name}.yaml').read_text())
+                config = yaml.safe_load((ROOT / {'ds03_default': 'config/kgld.yaml',
+                    'ocald_joint': 'config/history/ocald_joint.yaml',
+                    'proposal_cnn_c': 'config/proposal_cnn_c.yaml'}[name]).read_text())
                 config['model']['in_features'] = 14
                 if name == 'proposal_cnn_c': config['model']['window_size'] = 6
                 model = build_model(config, config['model']).eval()
@@ -143,7 +145,9 @@ class LinearProbes(unittest.TestCase):
                     reference.to_hdf(root / f'hi_{split}.h5', key='df')
             for name in ('ds03_default', 'ocald_joint', 'proposal_cnn_c'):
                 with self.subTest(name=name):
-                    cfg = yaml.safe_load((ROOT / f'config/{name}.yaml').read_text())
+                    cfg = yaml.safe_load((ROOT / {'ds03_default': 'config/kgld.yaml',
+                    'ocald_joint': 'config/history/ocald_joint.yaml',
+                    'proposal_cnn_c': 'config/proposal_cnn_c.yaml'}[name]).read_text())
                     cfg['data'].update(h5_path=str(raw), downsample_factor=2, val_split=.25,
                         processed_dir=str(root / 'processed'), cycle_hi_path=str(root / 'hi_dev.h5'),
                         test_cycle_hi_path=str(root / 'hi_test.h5'))

@@ -1,7 +1,11 @@
-# OC-iVAE
+# KGLD
 
-使用 PyTorch 在 N-CMAPSS 上构建无 HI/RUL 标签监督的健康指标，提供 OC-iVAE、cVAE、VAE，
-以及采用 OC-iVAE 数据协议的 OCALD、Proposal-C CNN 和 Residual-A/B 适配版。
+主模型由 OC-iVAE 更名为 KGLD：实现为 `models/kgld.py::KGLD`，主配置为 `config/kgld.yaml`。
+更名不改变模型计算或 state_dict keys；旧 `model_type: oc_ivae` 和未写类型的配置仍可加载。
+历史设计/审计文档、配置快照和实验产物保留原名；仓库目录仍为 oc-ivae-align。
+
+使用 PyTorch 在 N-CMAPSS 上构建无 HI/RUL 标签监督的健康指标，提供 KGLD、cVAE、VAE，
+以及采用 KGLD 数据协议的 OCALD、Proposal-C CNN 和 Residual-A/B 适配版。
 原三模型使用 `train.py`，新模型使用独立实验入口；全部共用 `evaluate.py`。
 项目规范见 [AGENTS.md](AGENTS.md)，当前状态见 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)。
 
@@ -25,7 +29,7 @@ train.py                       # 训练 CLI 和共享普通函数
 evaluate.py                    # cycle 推理、标签关联、dev-only 缩放与导出
 dataset.py                     # flight/window Dataset、unit/cycle 划分与 sampler
 models/
-    oc_ivae.py                 # 模型装配、分支、FiLM、conditional prior、HI head
+    kgld.py                 # 模型装配、分支、FiLM、conditional prior、HI head
     tcn.py                     # causal encoder 与 non-causal decoder
     vae.py                     # 两个已有 baseline 的差异组件
     ocald.py                   # 原 8D I/C OCALD、padding 适配及模型专属损失
@@ -56,7 +60,7 @@ docs/                         # 当前说明、设计和历史验证资料
 可在训练前预处理一次：
 
 ```bash
-python -m utils.preprocess --config config/exp_tuning_mono_weight.yaml
+python -m utils.preprocess --config config/kgld.yaml
 ```
 
 结果保存为 `data/processed/<原文件名>_<处理标识>.h5`，包含 dev/test 的
@@ -81,8 +85,8 @@ Dataset 只加载所选 unit 的已处理张量到内存，取样时不再重复
 既有同名历史 runs 不会被覆盖，使用 `--run-dir` 明确指定新名称。
 
 ```bash
-python train.py --config config/exp_tuning_mono_weight.yaml \
-  --run-dir runs/exp_tuning_mono_weight_new
+python train.py --config config/kgld.yaml \
+  --run-dir runs/kgld_new
 ```
 
 训练按 validation reconstruction 选择最佳 checkpoint，再自动评估全部 dev 和 test。
@@ -91,14 +95,14 @@ HI 标签不进入训练目标，test 不参与模型选择。
 独立重评使用新的输出目录；配置快照可定位同一运行的 `best.pt`：
 
 ```bash
-python evaluate.py --config runs/exp_tuning_mono_weight_new/config.yaml \
-  --output-dir runs/exp_tuning_mono_weight_new/reevaluation --device cpu --threads 2
+python evaluate.py --config runs/kgld_new/config.yaml \
+  --output-dir runs/kgld_new/reevaluation --device cpu --threads 2
 ```
 
 旧 checkpoint 使用显式路径，无需修改或迁移权重：
 
 ```bash
-python evaluate.py --config config/exp_tuning_mono_weight.yaml \
+python evaluate.py --config config/history/exp_tuning_mono_weight.yaml \
   --checkpoint checkpoints/exp_tuning_mono_weight/best_model.pt \
   --output-dir runs/exp_tuning_mono_weight_legacy_check --device cpu --threads 2
 ```
@@ -115,7 +119,7 @@ python -m experiments.run_w_summary_ablation --help
 
 | 模型 | 先验 | z_c 分支 | decoder W summary |
 | --- | --- | --- | --- |
-| OC-iVAE | u 条件 Gaussian | FiLM(u) | 由现有配置开关控制 |
+| KGLD | u 条件 Gaussian | FiLM(u) | 由现有配置开关控制 |
 | cVAE | 标准正态 | 保留 FiLM(u) | 保留同一配置控制 |
 | VAE | 标准正态 | 无 FiLM | 保留同一配置控制 |
 
@@ -126,7 +130,7 @@ python -m experiments.run_w_summary_ablation --help
 
 后续新增模型放在 `models/`，新增实验放在独立 `config/*.yaml`；
 共享训练/评估部分继续调用普通函数。模型特有目标和 HI 构造按实际差异扩展，
-不要求新模型伪造 OC-iVAE 的 12 个字段，不提前引入 registry 或通用 Trainer。
+不要求新模型伪造 KGLD 的 12 个字段，不提前引入 registry 或通用 Trainer。
 批量脚本只调度、审计和汇总，不复制训练循环与指标计算。
 
 ## OCALD 与 Proposal-C
@@ -136,12 +140,12 @@ python -m experiments.run_w_summary_ablation --help
 
 | 配置 | 训练方式与保留项 |
 | --- | --- |
-| [ocald_original](config/ocald_original.yaml) | 表示 100 轮后冻结，只训练 HIHead 100 轮；I/C 各 8 维 |
-| [ocald_joint](config/ocald_joint.yaml) | 联合 100 轮；KL 各 1、排序 10、头部 L2=1e-4 |
-| [ocald_joint_decoder_w](config/ocald_joint_decoder_w.yaml) | 同上，显式开启 decoder W 输入 |
+| [ocald_original](config/history/ocald_original.yaml) | 表示 100 轮后冻结，只训练 HIHead 100 轮；I/C 各 8 维 |
+| [ocald_joint](config/history/ocald_joint.yaml) | 联合 100 轮；KL 各 1、排序 10、头部 L2=1e-4 |
+| [ocald_joint_decoder_w](config/history/ocald_joint_decoder_w.yaml) | 同上，显式开启 decoder W 输入 |
 | [proposal_cnn_c](config/proposal_cnn_c.yaml) | CNN + batch Pearson C；Adam 1e-4、batch 20、50 轮 |
-| [residual_a](config/residual_a.yaml) | 旧 flight 配置，已有训练数值保留 |
-| [residual_b](config/residual_b.yaml) | 旧 flight 配置，已有训练数值保留 |
+| [residual_a](config/history/residual_a.yaml) | 旧 flight 配置，已有训练数值保留 |
+| [residual_b](config/history/residual_b.yaml) | 旧 flight 配置，已有训练数值保留 |
 | [residual_a_short_window](config/residual_a_short_window.yaml) | X/W 重构，长度50/stride1；健康段窗口 MAE、20轮 |
 | [residual_b_short_window](config/residual_b_short_window.yaml) | 仅 W 预测 X；相同窗口、训练与 flight 评价协议 |
 
@@ -164,11 +168,11 @@ Proposal-C 保留通道 [128,64,32,16]、kernel 85、same/ReLU，按 Keras 时�
 源 eval_utils.py 的函数签名缺逗号，只迁移已核对算法，不复制其训练/评价工具。
 
 ```bash
-python -m experiments.train_ocald --config config/ocald_original.yaml \
+python -m experiments.train_ocald --config config/history/ocald_original.yaml \
   --run-dir runs/ocald_original_seed42 --device cpu --threads 2
-python -m experiments.train_ocald --config config/ocald_joint.yaml \
+python -m experiments.train_ocald --config config/history/ocald_joint.yaml \
   --run-dir runs/ocald_joint_seed42 --device cpu --threads 2
-python -m experiments.train_ocald --config config/ocald_joint_decoder_w.yaml \
+python -m experiments.train_ocald --config config/history/ocald_joint_decoder_w.yaml \
   --run-dir runs/ocald_joint_decoder_w_seed42 --device cpu --threads 2
 python -m experiments.train_proposal_cnn --config config/proposal_cnn_c.yaml \
   --run-dir runs/proposal_cnn_c_seed42 --device cpu --threads 2
@@ -190,7 +194,7 @@ Glorot uniform/零偏置和 Keras Adam 数值约定与 Proposal-C 共用，网�
 
 新增独立 `residual_a_short_window.yaml`、`residual_b_short_window.yaml`，显式 `data.input_mode: short_window`。
 默认长度50、stride1是参考 Notebook 的短窗口候选，不声称适用于所有论文实验。
-沿用 OC-iVAE 原文件、变量顺序、设备划分、设备 X/dev 全局 W 标准化及每 flight 下采样。
+沿用 KGLD 原文件、变量顺序、设备划分、设备 X/dev 全局 W 标准化及每 flight 下采样。
 变长缓存复用公共 flight 缓存的统计，存储 **L_max 截断及 padding 之前** 的真实序列；
 Dataset 只保存 (flight, start) 索引并按需切片，不物化全部重叠窗口。缓存身份包含模式、窗口设置和处理规则。
 窗口不跨 flight，数量为 `floor((L-window_length)/stride)+1`；过短 flight 报错并列出键。
@@ -210,7 +214,7 @@ test 复用 PCA 和方向；随后同 unit/cycle 的窗口分数取均值，才�
 不跨周期平滑、不逐设备缩放、不裁剪。RUL/HI 仅在聚合后按 flight 关联，不按窗口重复计权。
 残差分批写入临时磁盘矩阵，普通 PCA 使用 auto solver，不替换为 IncrementalPCA；临时矩阵在上下文退出时删除。
 checkpoint 保存数值 PCA 参数、方向、完整 dev flight 键、窗口键摘要/数量、窗口设置及预处理来源，重评不重拟合。
-这是采用 OC-iVAE 归一化的短窗口适配版，**不是原论文完整数据协议复现**。
+这是采用 KGLD 归一化的短窗口适配版，**不是原论文完整数据协议复现**。
 
 ```bash
 python -m experiments.train_residual --config config/residual_a_short_window.yaml \
@@ -238,8 +242,8 @@ python -m experiments.evaluate_linear_probe --config runs/proposal_cnn_c/config.
 
 默认读取运行快照对应的 best.pt，可用 `--checkpoint` 指定其他已确认权重；输出目录必须尚不存在。
 可用 `--device cpu`；`--batch-size` 只改变推理批量，不改变拟合/评价样本。
-支持 OC-iVAE（及相同健康分支的现有 VAE/cVAE）、OCALD、Proposal-C，不支持 Residual。
-OC-iVAE 提取 HIHead 实际使用的完整 mu_d；OCALD 复用有效前缀适配后取完整 mu_I；Proposal-C 取1维Z。
+支持 KGLD（及相同健康分支的现有 VAE/cVAE）、OCALD、Proposal-C，不支持 Residual。
+KGLD 提取 HIHead 实际使用的完整 mu_d；OCALD 复用有效前缀适配后取完整 mu_I；Proposal-C 取1维Z。
 全部 eval/no_grad 并冻结参数，不采样、不做 PCA、不微调。当前均每flight一次输出，重复键直接报错。
 未来模型可向 `utils/linear_probe.py` 的键表接口提供已按 cycle 平均的完整慢状态，不新增空模型实现。
 
@@ -305,7 +309,7 @@ runs/<experiment_name>/
 头部 padding 和保留 tail 的截断。W 全局归一化后分别构造完整 cycle 的 u 和模型 W_seq；
 不改变先验、FiLM 或 decoder 的条件路径。未见 test unit 的传感器统计按现有实现单独计算。
 
-协议 `unsupervisedhi-ncmapss-v1` 按真实 flight 键关联分数：OC-iVAE 保持 posterior mean 的线性 raw HI，
+协议 `unsupervisedhi-ncmapss-v1` 按真实 flight 键关联分数：KGLD 保持 posterior mean 的线性 raw HI，
 OCALD 使用 -score(mu_I)，Proposal-C 使用 Z。
 仅在全部 dev 分数上拟合全局 MinMaxScaler，再 transform dev/test；
 不逐机缩放、不 EWMA、不裁剪。test HI 可以超出 `[0, 1]`。
@@ -319,7 +323,7 @@ OCALD 使用 -score(mu_I)，Proposal-C 使用 Z。
 普通训练和独立评估仍生成 dev/test 曲线；独立评估只保存评估结果及曲线。
 归一化参数保存在 `metrics.json` 的 `metadata.scaling`，完整评估出处和配置保存在 `metadata`，
 不再额外生成 `scaler.json` 或 `evaluation_config.yaml`。已有运行文件保持原样。
-OC-iVAE snapshot 记录实际维度、路径、源配置、已知 seed、初始权重/RNG hash、设备和线程。
+KGLD snapshot 记录实际维度、路径、源配置、已知 seed、初始权重/RNG hash、设备和线程。
 普通入口保留原未固定初始化 seed 的行为：实际 seed 未指定时记录 null，
 YAML 中的 configured_seed 单独记录；配对脚本明确设置 seed=42。
 hash 是审计依据，不等同于保存完整初始化/RNG 状态。
@@ -340,7 +344,7 @@ PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
 卷积/Flatten/损失及 Adam 独立公式对照、完整 dev 缩放与六指标/CSV 检查。
 smoke 在测试创建的合成数据上自动加 --smoke 执行两个入口；临时配置、数据、权重和输出由 TemporaryDirectory 清理。
 另对照固定 kgld commit：三份 OCALD 的初始化、随机前向、损失、参数梯度及联合配对序列完全一致；
-旧 OC-iVAE checkpoint 的真实 DS03 1101 个周期分数、完整 metrics 和曲线与修改前一致。
+旧 KGLD checkpoint 的真实 DS03 1101 个周期分数、完整 metrics 和曲线与修改前一致。
 没有 TensorFlow 环境或源 CNN 权重，未做跨框架逐位复现，也未执行完整 50/100 轮训练或 GPU 验证。
 
 W-summary 配对脚本在运行时检查配置、共享初始权重和共同训练 epochs 的 batch/RNG/学习率摘要，
@@ -349,13 +353,13 @@ W-summary 配对脚本在运行时检查配置、共享初始权重和共同训�
 合成数据含每设备24个周期；Residual 每次仅更新7条健康段样本，但 PCA/scaler 使用全部144条 dev，
 test 为48条；验证更新键、输入路径、独立卷积/MAE及梯度、展平、sklearn PCA/方向、保存重载及六指标。
 smoke 命令由 `tests/test_experiment_smoke.py` 使用上述训练命令加 `--device cpu --smoke` 执行；
-旧 OC-iVAE DS03 checkpoint 的1101条 flight 在本次修改前后重评，scores、metrics、两张曲线逐字节一致。
+旧 KGLD DS03 checkpoint 的1101条 flight 在本次修改前后重评，scores、metrics、两张曲线逐字节一致。
 测试临时数据/配置/权重/曲线自动清理。未运行完整20轮或 TensorFlow/GPU 对照。
 
 2026-10-18 短窗口验证：13 项 unittest 通过，覆盖八份配置 CPU CLI smoke；
 归一化提取前后固定张量完全一致，源 sequence_generator 的2850个合成窗口 X/W/键逐元素一致。
 新增测试核对窗口边界/数量、未截断序列、统计复用、短 flight 报错、PCA/10窗口方向/flight均值顺序、
-推理 batch 变化容差、完整键覆盖、重载和 dev-only 缩放。旧 OC-iVAE、flight A/B 的真实 DS03
+推理 batch 变化容差、完整键覆盖、重载和 dev-only 缩放。旧 KGLD、flight A/B 的真实 DS03
 checkpoint 重评：scores、metrics、两张曲线分别与修改前逐字节一致。
 
 独立真实 DS03 smoke（均已清理临时输出）：
@@ -391,9 +395,14 @@ CUBLAS_WORKSPACE_CONFIG=:4096:8 python -m experiments.run_w_summary_ablation \
   --output-dir runs/w_summary_pair_cuda_new --device cuda --threads 2
 ```
 
-重构证据见 [第一步](docs/REFACTOR_STEP1.md)、[第二步](docs/REFACTOR_STEP2.md)、
-[第三步](docs/REFACTOR_STEP3.md)、[第四步](docs/REFACTOR_STEP4.md)、[第五步](docs/REFACTOR_STEP5.md)。
+重构证据见 [第一步](docs/history/REFACTOR_STEP1.md)、[第二步](docs/history/REFACTOR_STEP2.md)、
+[第三步](docs/history/REFACTOR_STEP3.md)、[第四步](docs/history/REFACTOR_STEP4.md)、[第五步](docs/history/REFACTOR_STEP5.md)。
 当前代码说明见 [CODE_WALKTHROUGH.md](docs/CODE_WALKTHROUGH.md)。
 原状态和走读保留在 [docs/history/](docs/history/)，设计、旧审计和评估验证文档保留历史结论。
 CPU 上模型/损失/梯度/采样对照通过；DS03 旧 checkpoint 的 1101 个 flight 重评一致。
 本轮真实数据仅做 Residual 单步 smoke；没有完整预算训练、GPU 验证或真实 DS02 实验，不称为完整实验复现。
+
+2026-10-19 模型更名为 KGLD：文件/类/入口/线性探测及当前文档引用已同步。
+主配置为 config/kgld.yaml，旧配置和state_dict权重不迁移；旧模型类型oc_ivae仅作为名称别名解析。
+原18项测试与新增旧类型加载测试通过；固定输入/随机状态的初始化、keys、前向、三阶段损失和梯度完全一致，
+历史DS03 checkpoint的1101条flight重评分数、完整metrics和曲线逐字节一致。未执行完整训练或GPU验证。

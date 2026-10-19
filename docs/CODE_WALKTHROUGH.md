@@ -1,6 +1,6 @@
 # 当前代码走读
 
-更新：2026-10-18。本文描述简化重构后的实现，旧走读保留在
+更新：2026-10-19。本文描述简化重构后的实现，旧走读保留在
 [history/CODE_WALKTHROUGH_pre_refactor.md](history/CODE_WALKTHROUGH_pre_refactor.md)。
 入口与环境准备见 [README](../README.md)。
 
@@ -11,7 +11,7 @@
 | dataset.py | NCMAPSSDataset/ShortWindowDataset、flight 内索引切窗、unit split、sampler |
 | utils/preprocess.py | 离线/首次自动预处理、HDF5 缓存、cycle 分组、统计、归一化、u、RUL 校验 |
 | models/tcn.py | causal encoder、masked LayerNorm、non-causal decoder、W summary |
-| models/oc_ivae.py | OC-iVAE 装配、两个 posterior、FiLM、conditional prior、HI head |
+| models/kgld.py | KGLD 装配、两个 posterior、FiLM、conditional prior、HI head |
 | models/vae.py | 标准正态先验与两个 baseline 的组件替换 |
 | models/__init__.py | 原三模型及 OCALD/Proposal-C/Residual 的显式构建分支 |
 | models/ocald.py | 有效前缀适配、原 GRU/MLP/HIHead、flight 求和 ELBO/排序/L2 |
@@ -81,7 +81,7 @@ forward 保留十二个字段：x_hat；两个 posterior 的 mu/log_var；
 模块属性和参数注册顺序保持，旧 state_dict 无需迁移。
 
 cVAE 仅替换标准正态 prior；VAE 再替换无 FiLM 的 z_c 分支。
-两者先构造 OC-iVAE 再替换组件，保持初始化/RNG 消耗；没有另写训练循环。
+两者先构造 KGLD 再替换组件，保持初始化/RNG 消耗；没有另写训练循环。
 关闭 decoder W-summary 只将八个输入置零，投影形状不变。
 
 ## 训练链路
@@ -126,7 +126,7 @@ run_evaluation() 默认生成 dev/test 曲线；配对脚本传入 save_plots=Fa
 ## 两个迁移模型入口
 
 experiments.train_ocald 保留独立两阶段与联合流程，experiments.train_proposal_cnn 保留独立 CNN 目标；
-不经过原 train_model 的 OC-iVAE loss、scheduler、分层 sampler 或验证重构选模。
+不经过原 train_model 的 KGLD loss、scheduler、分层 sampler 或验证重构选模。
 Dataset 的数据缓存和 unit split 共用，OCALD 仅重排左右 padding，CNN 原样读取固定长度 X/W。
 评价 predict_cycles 按具体模型提取 -score(mu_I)、Z 或原 hi_raw，不要求伪造统一 forward 字段。
 新 checkpoint 保存完整实际配置，评价拒绝外部结构/数据冲突并核对预处理文件来源；

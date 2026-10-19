@@ -1,4 +1,4 @@
-"""OCALD (kgld 4f9e53cd), adapted only to the shared OC-iVAE input protocol."""
+"""OCALD (kgld 4f9e53cd), adapted only to the shared KGLD input protocol."""
 from __future__ import annotations
 
 import torch

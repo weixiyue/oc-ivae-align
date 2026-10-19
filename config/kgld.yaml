@@ -1,5 +1,7 @@
-# OC-iVAE Default Configuration — N-CMAPSS DS03
+# KGLD Default Configuration — N-CMAPSS DS03
 # Based on OC_iVAE_model_design.md §8
+
+model_type: kgld
 
 data:
   h5_path: "data/raw/N-CMAPSS_DS03.h5"

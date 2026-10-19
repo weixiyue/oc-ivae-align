@@ -1,6 +1,6 @@
 # 当前项目状态
 
-更新：2026-10-18。以源码、独立 YAML 和运行快照为准；设计和历史审计不覆盖当前 AGENTS.md。
+更新：2026-10-19。以源码、独立 YAML 和运行快照为准；设计和历史审计不覆盖当前 AGENTS.md。
 当前使用命令见 [README](../README.md)，实现说明见 [代码走读](CODE_WALKTHROUGH.md)。
 
 ## 已完成的结构重构
@@ -15,7 +15,7 @@
 
 ## 模型与实验
 
-现有三种模型均可选择：缺省为 OC-iVAE，baseline_type 为 cvae 或 vae。
+现有三种模型均可选择：缺省为 KGLD，baseline_type 为 cvae 或 vae。
 VAE 仍保留双 latent 分支及 decoder W 路径。
 新增采用公共数据协议的 OCALD 两阶段/联合/decoder W 和 Proposal-C CNN；来源 commit 及命令见 README。
 只迁入 8D I/C 原结构和 CNN C 约束，未迁入标量 I、时序 C 或 NG/F。
@@ -77,7 +77,7 @@ history、最佳权重、optimizer 状态、scores、scaler、指标、对比 CS
 本次迁移的永久测试入口为 `python -m unittest discover -s tests -v`，8 项通过，
 包含四个 CPU CLI smoke（合成数据，每阶段 1 次更新，完整 dev 缩放和评价）。
 OCALD 与固定源 commit 的前向/损失/梯度/联合采样完全一致；CNN 使用独立公式和梯度对照。
-旧 OC-iVAE 真实 DS03 的 scores、完整 metrics 和曲线均不变。所有本次临时权重、配置和输出已清理。
+旧 KGLD 真实 DS03 的 scores、完整 metrics 和曲线均不变。所有本次临时权重、配置和输出已清理。
 无 TensorFlow/源 CNN 权重，未做跨框架逐位复现、完整预算训练或 GPU 验证。
 
 2026-10-18 新增 Residual-A/B 和独立完整配置，共用健康段训练入口、缓存与公共六指标。
@@ -88,12 +88,16 @@ OCALD 与固定源 commit 的前向/损失/梯度/联合采样完全一致；CNN
 
 2026-10-18 Residual 短窗口接入：新增两份独立50/stride1配置，旧 flight 配置数值保留。
 变长有效序列复用原统计，在 L_max 截断/padding前切窗；普通 PCA/10窗口方向后按flight均值再公共缩放。
-13项测试通过，含八份配置 CPU smoke、源窗口对照、旧 OC-iVAE/flight A/B 真实checkpoint等价重评。
+13项测试通过，含八份配置 CPU smoke、源窗口对照、旧 KGLD/flight A/B 真实checkpoint等价重评。
 真实DS03 A/B各1步/512窗口；健康段140flight/112402窗口，完整dev 524907窗口、test 403868窗口。
 永久缓存/测试保留；本次临时权重、残差矩阵和输出清理；未完整训练或验证GPU/TensorFlow，不作性能结论。
 
-独立线性探测已接入：OC-iVAE mu_d、OCALD mu_I、Proposal-C Z及各自公共最终HI，
+独立线性探测已接入：KGLD mu_d、OCALD mu_I、Proposal-C Z及各自公共最终HI，
 冻结网络，严格按已记录训练设备拟合StandardScaler+OLS，测试cycle合并报告R²/MAE/RMSE。
 18项测试通过；实际DS03三模型使用516 fit/147 val/438 test，公共六指标产物保持逐字节一致。
 探测产物使用独立目录和probe_metrics.json，不覆盖无监督结果；未知划分要求显式YAML。
 仅CPU评价验证，无网络训练或GPU验证；临时产物清理，命令及协议见README。
+
+2026-10-19 主模型更名为KGLD：models/kgld.py::KGLD，默认config/kgld.yaml；旧state_dict keys不变。
+默认/旧oc_ivae模型类型均可加载；历史配置、权重和产物保留，不提供旧Python模块占位文件。
+18项原测试及1项新增旧类型加载测试通过，前向/真实三阶段loss/梯度与旧实现完全一致，历史checkpoint重评一致。

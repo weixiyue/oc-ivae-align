@@ -1,10 +1,10 @@
-"""cVAE and VAE baselines using the OC-iVAE architecture."""
+"""cVAE and VAE baselines using the KGLD architecture."""
 
 from __future__ import annotations
 
 from torch import Tensor, nn
 
-from models.oc_ivae import MaskedAvgPool, OC_iVAE
+from models.kgld import MaskedAvgPool, KGLD
 from models.tcn import TCNResBlock
 
 
@@ -67,22 +67,22 @@ class PassthroughZcBranch(nn.Module):
         return mu, log_var
 
 
-def build_cvae_model(config: dict) -> OC_iVAE:
-    """Build OC-iVAE with a fixed standard normal prior for cVAE baseline."""
-    model = OC_iVAE(config)
+def build_cvae_model(config: dict) -> KGLD:
+    """Build KGLD with a fixed standard normal prior for cVAE baseline."""
+    model = KGLD(config)
     d_zd = int(config.get("d_zd", 2))
     d_zc = int(config.get("d_zc", 8))
     model.prior = StandardNormalPrior(d_zd=d_zd, d_zc=d_zc)
     return model
 
 
-def build_vae_model(config: dict) -> OC_iVAE:
+def build_vae_model(config: dict) -> KGLD:
     """Standard VAE baseline.
 
     No FiLM conditioning, standard normal prior. Used to measure total
-    contribution of OC-iVAE conditioning mechanism.
+    contribution of KGLD conditioning mechanism.
     """
-    model = OC_iVAE(config)
+    model = KGLD(config)
     c_hidden = int(config.get("c_hidden", 64))
     d_zd = int(config.get("d_zd", 2))
     d_zc = int(config.get("d_zc", 8))
