@@ -34,7 +34,7 @@ loss_weights:
   beta_d: 0.5
   beta_c: 1.0
   lambda_hsic: 1.0
-  lambda_mono: 2.0
+  lambda_mono: 10.0
   lambda_spearman: 0.5
   ranking_margin: 0.01
   ranking_delta_t: 3
