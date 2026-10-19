@@ -249,3 +249,68 @@
 - Epochs completed: 100
 - Checkpoint: runs/ds03_vae_baseline/best.pt
 - Unified all-dev/test evaluation: runs/ds03_vae_baseline
+
+## 2026-10-19 15:22:54 | training-run | config/tuning/kgld_hsic_5.yaml
+- Epochs completed: 100
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 15:25:37 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 97
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 15:28:18 | training-run | config/kgld.yaml
+- Epochs completed: 100
+- Checkpoint: runs/kgld/best.pt
+- Unified all-dev/test evaluation: runs/kgld
+
+## 2026-10-19 15:32:22 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 194
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 15:34:43 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 41
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 15:35:42 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 40
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 15:37:21 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 200
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 15:39:10 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 200
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 15:41:44 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 200
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 16:20:10 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 200
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 16:21:41 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 200
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 16:24:46 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 200
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
+
+## 2026-10-19 16:27:04 | training-run | config/tuning/kgld_tuning.yaml
+- Epochs completed: 200
+- Checkpoint: runs/kgld_tuning/best.pt
+- Unified all-dev/test evaluation: runs/kgld_tuning
