@@ -35,12 +35,12 @@ training:
 loss_weights:
   beta_d: 0.1
   beta_c: 0.25
-  lambda_hsic: 1
+  lambda_hsic: 1.0
   lambda_mono: 10
   lambda_spearman: 0.5
   ranking_margin: 0.01
   ranking_delta_t: 3
-  spearman_tau: 0.3
+  spearman_tau: 0.1
 
 postprocess:
   ewma_alpha: 0.3
