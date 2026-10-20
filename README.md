@@ -302,6 +302,36 @@ runs/<experiment_name>/
 两张图按发动机展示两组 HI 与参考 HI。每组不再单独生成曲线。
 共同完成 epochs 的配对审计结果保存在各组 `config.yaml` 的 `run_metadata.paired_audit` 中。
 
+## 批量重评与论文主结果表
+
+先列出待评估运行（不加载 checkpoint、不推理、不创建输出目录）：
+
+```bash
+python -m experiments.reevaluate_runs --runs-dir runs \
+  --output-dir runs/main_results_20261020 --device cuda --dry-run
+```
+
+确认列表后，去掉 `--dry-run` 正式重评；CPU 可改用 `--device cpu`：
+
+```bash
+python -m experiments.reevaluate_runs --runs-dir runs \
+  --output-dir runs/main_results_20261020 --device cuda
+```
+
+输出目录必须不存在。递归扫描时排除所有 `history/` 子树，不跟随目录符号链接。
+含 `config.yaml`、`best.pt`、`history.csv`、`metrics.json` 或 `scores.csv` 的目录，
+以及非根空叶目录作为候选；缺少 `config.yaml` 或 `best.pt` 记为跳过，
+无运行产物的中间分组目录不计为运行。每个完整运行调用公共 `evaluate.py`，
+沿用 checkpoint 实际配置及校验，在新目录的 `evaluations/<原相对运行路径>/` 保存
+`metrics.json`、`scores.csv` 和 dev/test 曲线；不会改写原运行产物。
+
+根目录生成 `main_results.csv`、`main_results.md` 和 `summary.json`。
+主表每个成功运行一行，列为方法、运行名称、MAE↓、RMSE↓、Mon↑、Tren↑、FC↑、MI↑；
+方法按公共评估器返回的实际配置区分，运行名称保留变体，不合并均值或标准差。
+仅提取 test 总体指标，RMSE 直接采用公共评估中按全部 cycle 合并的结果，不平均逐设备 RMSE。
+缺失指标在 CSV 留空、Markdown 显示 `—`；MAPE、dev、逐设备指标及完整配置仍在各运行详细结果中。
+单个运行失败后继续，汇总记录成功、跳过、失败及原因/错误 traceback。
+
 ## 数据与评估协议
 
 输入为 N-CMAPSS HDF5 的 `A/W/X_s/Y`，按 unit/cycle 分组并覆盖完整生命周期。
