@@ -314,6 +314,7 @@ OCALD 使用 -score(mu_I)，Proposal-C 使用 Z。
 仅在全部 dev 分数上拟合全局 MinMaxScaler，再 transform dev/test；
 不逐机缩放、不 EWMA、不裁剪。test HI 可以超出 `[0, 1]`。
 六项指标为 MAE、MAPE、Monotonicity、Trendability、FC、MI；MI random_state=42。
+指标含义、计算公式与汇总规则见 [健康指数评价指标](docs/HI_METRICS.md)，另列独立线性探测指标。
 无 HI 参考时 MAE/MAPE 为 null，RUL 仍用于 MI；FC 与旧 Prognosability 不能直接混用。
 参考 HI 若无 cycle 列，按现有严格行序检查关联，其语义行序的独立核实限制保留。
 
