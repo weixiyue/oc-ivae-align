@@ -335,6 +335,41 @@ dev Min–Max 和指标函数评价。公共 `evaluate.py` 和批量重评入口
 PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p test_knowledge_ablation.py -v
 ```
 
+## KGLD 损失消融
+
+独立入口读取当前 `config/kgld.yaml`，首先严格核对基准损失：`beta_d=0.1`、`beta_c=0.25`、
+`lambda_hsic=1.0`、`lambda_mono=10`、`lambda_spearman=0.5`、`ranking_margin=0.01`、
+`ranking_delta_t=3`、`spearman_tau=0.1`；不符则报错，不自动覆盖。
+
+```bash
+python -m experiments.run_loss_ablation \
+  --output-dir runs/loss_ablation_seed42 --seed 42 --device cuda --dry-run
+python -m experiments.run_loss_ablation \
+  --output-dir runs/loss_ablation_seed42 --seed 42 --device cuda
+```
+
+根目录必须不存在。依次从头训练 `no_hsic`、`no_pairwise`、`no_spearman`，
+每组仅将对应的 `lambda_hsic`、`lambda_mono`、`lambda_spearman` 设为 0。
+其他参数、阶段和选模保持基准不变，不重跑 full。三组使用相同初始化 seed；
+设备划分和分层采样保持现有 seed 42。`--dry-run` 只显示损失/运行信息差异，不创建结果目录。
+
+每个子目录保存实际配置、带变体/seed/完整配置的 `best.pt`、`history.csv` 和公共评估产物。
+根目录生成 `loss_ablation.csv`、`loss_ablation.md`，按每组 test 总体值列出
+`Variant | MAE↓ | RMSE↓ | Mon↑ | Tren↑ | FC↑ | MI↑`；缺失指标保持为空，不填零。
+full 的已有结果由后续自行合并。
+
+各组 `checkpoint_report.json` 及根目录 `checkpoint_reports.json` 记录最佳 checkpoint 的阶段、
+已训练轮数、是否曾进入时间约束阶段，以及最佳 checkpoint 是否处于该阶段。
+损失函数使用零起始 epoch，checkpoint 保存已完成轮数；默认阶段边界 10/25 下，
+最佳 checkpoint 的 `epoch >= 26` 才属于时间约束阶段。该报告不改变最小验证重构损失选模。
+
+轻量验证命令如下；其中实际 CPU 训练仅使用临时合成数据，每组两轮，维度/预算缩小仅作用于测试配置，
+不修改正式 YAML，不据此报告正式性能：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p test_loss_ablation.py -v
+```
+
 ## 批量重评与论文主结果表
 
 先列出待评估运行（不加载 checkpoint、不推理、不创建输出目录）：
