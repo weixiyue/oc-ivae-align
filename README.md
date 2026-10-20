@@ -302,6 +302,39 @@ runs/<experiment_name>/
 两张图按发动机展示两组 HI 与参考 HI。每组不再单独生成曲线。
 共同完成 epochs 的配对审计结果保存在各组 `config.yaml` 的 `run_metadata.paired_audit` 中。
 
+## KGLD 知识机制消融
+
+独立入口只读取启动时的 `config/kgld.yaml`，依次运行 `no_prior`、`no_film`、
+`no_prior_no_film`，不重跑完整 KGLD，也不读取历史 VAE/cVAE 或完整模型运行配置。
+
+```bash
+python -m experiments.run_knowledge_ablation \
+  --output-dir runs/knowledge_ablation_seed42 --seed 42 --device cuda --dry-run
+python -m experiments.run_knowledge_ablation \
+  --output-dir runs/knowledge_ablation_seed42 --seed 42 --device cuda
+```
+
+`--dry-run` 列出三组变体、配置差异和目录，不加载数据或模型、不创建结果。
+正式运行时根目录必须不存在；每组重置模型随机种子，设备划分和分层采样仍用基准的 seed 42。
+数据、模型维度、W 解码路径、训练预算/早停/阶段安排及全部损失参数保持当前 YAML 设置，
+使用 `train_model()` 的原训练流程和最小验证重构损失选模规则。
+
+`no_prior` 仅替换为两块标准正态先验，保留 FiLM 和原 KL 权重；`no_film` 仅替换工况后验分支，
+复制原 TCN/head 权重并完全忽略 u，保留条件先验；第三组同时替换两者。
+各组先正常初始化 KGLD，再替换模块，保留共同参数及初始化后的随机状态。
+
+每个子目录保存实际完整 `config.yaml`、`best.pt`、`history.csv`、`scores.csv`、
+`metrics.json` 和 dev/test 曲线；根目录保存六列 test 指标的 `comparison.csv`、`comparison.md`。
+checkpoint 记录 `kgld_knowledge_ablation` 类型及变体，通过新增脚本的
+`load_ablation_checkpoint()` 重建，训练后由 `evaluate_ablation()` 调用公共预测、标签关联、
+dev Min–Max 和指标函数评价。公共 `evaluate.py` 和批量重评入口会拒绝将这些权重当完整 KGLD 加载。
+
+轻量检查命令（合成输入，训练接口使用替身，仅保存初始化权重，无优化器更新）：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p test_knowledge_ablation.py -v
+```
+
 ## 批量重评与论文主结果表
 
 先列出待评估运行（不加载 checkpoint、不推理、不创建输出目录）：

@@ -1,7 +1,8 @@
-"""cVAE and VAE baselines using the KGLD architecture."""
+"""Existing VAE baselines and isolated knowledge ablations of the KGLD architecture."""
 
 from __future__ import annotations
 
+import torch
 from torch import Tensor, nn
 
 from models.kgld import MaskedAvgPool, KGLD
@@ -88,4 +89,22 @@ def build_vae_model(config: dict) -> KGLD:
     d_zc = int(config.get("d_zc", 8))
     model.zc_branch = PassthroughZcBranch(c_hidden=c_hidden, d_zc=d_zc)
     model.prior = StandardNormalPrior(d_zd=d_zd, d_zc=d_zc)
+    return model
+
+
+def build_knowledge_ablation(config: dict, variant: str) -> KGLD:
+    """Replace only the requested knowledge modules after ordinary KGLD initialization."""
+    if variant not in ('no_prior', 'no_film', 'no_prior_no_film'):
+        raise ValueError(f'unknown knowledge ablation: {variant}')
+    model = KGLD(config)
+    if variant in ('no_film', 'no_prior_no_film'):
+        original = model.zc_branch
+        # All retained weights and the post-KGLD RNG state stay shared across variants.
+        with torch.random.fork_rng(devices=[]):
+            branch = PassthroughZcBranch(config.get('c_hidden', 64), config.get('d_zc', 8))
+        branch.tcn_resblock.load_state_dict(original.tcn_resblock.state_dict())
+        branch.head.load_state_dict(original.head.state_dict())
+        model.zc_branch = branch
+    if variant in ('no_prior', 'no_prior_no_film'):
+        model.prior = StandardNormalPrior(config.get('d_zd', 2), config.get('d_zc', 8))
     return model
