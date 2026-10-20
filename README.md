@@ -302,6 +302,49 @@ runs/<experiment_name>/
 两张图按发动机展示两组 HI 与参考 HI。每组不再单独生成曲线。
 共同完成 epochs 的配对审计结果保存在各组 `config.yaml` 的 `run_metadata.paired_audit` 中。
 
+## 批量线性探测对比
+
+新增入口显式接收运行目录，支持完整 KGLD、三个条件先验/FiLM 消融、
+三个 HSIC/pairwise/Spearman 损失消融及 Proposal-C；OCALD、Residual-A/B 记录为跳过。
+不训练或微调网络，不改写 checkpoint 和原运行结果。
+
+```bash
+python -m experiments.run_linear_probe_comparison \
+  --run-dirs runs/kgld \
+    runs/knowledge_ablation_seed42/no_prior \
+    runs/knowledge_ablation_seed42/no_film \
+    runs/knowledge_ablation_seed42/no_prior_no_film \
+    runs/loss_ablation_seed42/no_hsic \
+    runs/loss_ablation_seed42/no_pairwise \
+    runs/loss_ablation_seed42/no_spearman \
+    runs/proposal_cnn_c \
+  --output-dir runs/linear_probe_comparison_seed42 --device cuda --dry-run
+```
+
+正式批量探测去掉 `--dry-run`，只列出实际存在、已训练完成的运行目录；输出根目录必须不存在。
+dry-run 只读取配置、checkpoint 及已有预处理缓存的设备键，不构建模型、不推理、不拟合回归器，
+也不创建缓存或结果。划分调用现有 `resolve_probe_split()` 校验；缺少可靠划分或缓存出处时记录失败，
+不根据运行名称、配置 seed 或测试结果猜测。单个运行失败后继续，最终输出成功/跳过/失败清单。
+
+正常运行复用 `evaluate_linear_probe.run()`；结构消融局部绑定专用 checkpoint 加载器，
+保留原探测流程，不修改现有模块全局函数。KGLD 所有变体使用完整 mu_d，Proposal-C 使用标量 Z。
+沿用训练设备专属回归拟合、验证诊断、test cycle 等权合并、标签关联和公共 dev 全局 HI 缩放；
+不对探测预测额外缩放、平滑或裁剪。Proposal-C 的 representation/HI 可能仅有仿射差别，两组结果都保留，
+不视为独立收益。
+
+每组输出到 `probes/<序号>_<运行目录名>/`，同名源目录也不会冲突；
+保存 `config.yaml`、`probe_metrics.json`、`probe_predictions.csv`、`probe_features.csv`、
+`probe_parameters.json`，补充来源、变体、实际 seed、维数和 fit/val/test 设备。
+实际 seed 未记录时保留 null，不用 configured seed 替代。
+根目录生成 `linear_probe_comparison.csv`、`linear_probe_comparison.md` 和 `comparison_summary.json`；
+每个成功运行独立一行，不合并种子或配置，缺失指标不填零。原公共 HI 指标不变。
+
+合成 checkpoint 的轻量检查（不训练网络）：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p test_linear_probe_comparison.py -v
+```
+
 ## KGLD 知识机制消融
 
 独立入口只读取启动时的 `config/kgld.yaml`，依次运行 `no_prior`、`no_film`、
