@@ -85,7 +85,7 @@ class ExperimentSmoke(unittest.TestCase):
                     np.testing.assert_array_equal(pred.score, frame[frame.split == 'dev'].score)
                     for split in ('dev', 'test'):
                         recomputed = evaluate_all(frame[frame.split == split], random_state=42)
-                        for key in ('mae', 'mape', 'monotonicity', 'trendability', 'fc', 'mi'):
+                        for key in ('mae', 'rmse', 'mape', 'monotonicity', 'trendability', 'fc', 'mi'):
                             self.assertEqual(recomputed[key], metrics[split][key])
                         self.assertTrue((output / f'hi_curves_{split}.png').is_file())
                     history = pd.read_csv(output / 'history.csv')

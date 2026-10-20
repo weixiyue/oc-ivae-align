@@ -254,7 +254,7 @@ def run_evaluation(
         _plot_curves(dev, destination / 'hi_curves_dev.png')
         _plot_curves(test, destination / 'hi_curves_test.png')
     for split, values in metrics.items():
-        print(split, {k: values[k] for k in ['mae','mape','monotonicity','trendability','fc','mi']}, flush=True)
+        print(split, {k: values[k] for k in ['mae','rmse','mape','monotonicity','trendability','fc','mi']}, flush=True)
         if values['issues']:
             print('Diagnostics:', values['issues'], flush=True)
     if scaler['constant_dev_output']:

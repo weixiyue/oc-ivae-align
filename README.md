@@ -181,7 +181,7 @@ python evaluate.py --config runs/proposal_cnn_c_seed42/config.yaml \
 ```
 
 新入口默认 CPU，可显式选择 cuda；每次必须使用新目录。加 `--smoke` 后每阶段 1 轮、最多 1 次更新，
-OCALD 仅取各训练设备前 8 个 flight；公共 scaler 和六指标始终使用完整 dev/test，不缩小评价集合。
+OCALD 仅取各训练设备前 8 个 flight；公共 scaler 和七项指标始终使用完整 dev/test，不缩小评价集合。
 新模型按最后轮保存 `best.pt`，元数据 selection=last_epoch；两阶段另存 `representation.pt`。
 checkpoint 包含模型类型、阶段、完整实际配置、seed 和预处理出处。
 重评使用运行快照，结构/数据不一致的外部配置会报错，其余设置优先使用 checkpoint 保存配置。
@@ -210,7 +210,7 @@ python -m utils.preprocess --config config/residual_a_short_window.yaml
 
 窗口绝对残差按时间优先展平，用全部 dev **窗口** 拟合普通单分量 PCA；
 按各 dev 设备 cycle/窗口起点排序后的前10与后10 **窗口** 均值差确定全局方向，负差时翻转。
-test 复用 PCA 和方向；随后同 unit/cycle 的窗口分数取均值，才交给公共 dev 全局 Min–Max 和六指标。
+test 复用 PCA 和方向；随后同 unit/cycle 的窗口分数取均值，才交给公共 dev 全局 Min–Max 和七项指标。
 不跨周期平滑、不逐设备缩放、不裁剪。RUL/HI 仅在聚合后按 flight 关联，不按窗口重复计权。
 残差分批写入临时磁盘矩阵，普通 PCA 使用 auto solver，不替换为 IncrementalPCA；临时矩阵在上下文退出时删除。
 checkpoint 保存数值 PCA 参数、方向、完整 dev flight 键、窗口键摘要/数量、窗口设置及预处理来源，重评不重拟合。
@@ -229,7 +229,7 @@ python evaluate.py --config runs/residual_a_short_window_seed42/config.yaml \
 history 记录健康 flight 数、候选窗口数、更新步数/累计步数、实际抽样数、MAE 及耗时。
 每次使用新目录，拒绝覆盖既有结果；旧 flight 模式按每设备前后10个 flight 定向，保持历史语义。
 
-独立线性探测入口（使用参考 HI 标签的表征评价，**不属于无监督六指标**）：
+独立线性探测入口（使用参考 HI 标签的表征评价，**不属于公共 HI 七项指标**）：
 
 ```bash
 python -m experiments.evaluate_linear_probe --config runs/ds03_default/config.yaml \
@@ -298,7 +298,7 @@ runs/<experiment_name>/
         scores.csv
 ```
 
-`comparison.csv` 包含两组 dev/test 六项指标和 false 减 true 的差值；
+`comparison.csv` 包含两组 dev/test 七项指标和 false 减 true 的差值；
 两张图按发动机展示两组 HI 与参考 HI。每组不再单独生成曲线。
 共同完成 epochs 的配对审计结果保存在各组 `config.yaml` 的 `run_metadata.paired_audit` 中。
 
@@ -313,9 +313,9 @@ runs/<experiment_name>/
 OCALD 使用 -score(mu_I)，Proposal-C 使用 Z。
 仅在全部 dev 分数上拟合全局 MinMaxScaler，再 transform dev/test；
 不逐机缩放、不 EWMA、不裁剪。test HI 可以超出 `[0, 1]`。
-六项指标为 MAE、MAPE、Monotonicity、Trendability、FC、MI；MI random_state=42。
+七项指标为 MAE、RMSE、MAPE、Monotonicity、Trendability、FC、MI；MI random_state=42。
 指标含义、计算公式与汇总规则见 [健康指数评价指标](docs/HI_METRICS.md)，另列独立线性探测指标。
-无 HI 参考时 MAE/MAPE 为 null，RUL 仍用于 MI；FC 与旧 Prognosability 不能直接混用。
+无 HI 参考时 MAE/RMSE/MAPE 为 null，RUL 仍用于 MI；FC 与旧 Prognosability 不能直接混用。
 参考 HI 若无 cycle 列，按现有严格行序检查关联，其语义行序的独立核实限制保留。
 
 ## 运行产物与复现范围

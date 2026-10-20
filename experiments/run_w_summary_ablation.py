@@ -20,7 +20,7 @@ from models.kgld import KGLD
 from train import state_digest, train_model
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-METRIC_KEYS = ('mae', 'mape', 'monotonicity', 'trendability', 'fc', 'mi')
+METRIC_KEYS = ('mae', 'rmse', 'mape', 'monotonicity', 'trendability', 'fc', 'mi')
 
 
 def seed_training(seed: int) -> None:

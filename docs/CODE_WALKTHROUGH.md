@@ -25,7 +25,7 @@
 | evaluate.py | 推理、flight 关联、dev-only scaler、评估和导出 |
 | experiments/evaluate_linear_probe.py | 独立带标签线性探测、训练设备拟合、测试设备评价 |
 | utils/linear_probe.py | mu_d/mu_I/Z确定性提取、键表/划分验证、StandardScaler+OLS及R²诊断 |
-| utils/metrics.py | 六项指标、聚合方式、非有限值诊断 |
+| utils/metrics.py | 七项指标（含 RMSE）、聚合方式、非有限值诊断 |
 | experiments/ | 配对初始化、内存采样记录、调度、一致性检查与比较 |
 
 ## 数据链路
@@ -113,7 +113,7 @@ predict_cycles() 使用 batch size 64、posterior mean，直接生成 float64 un
 没有 window 平均分支，重复 flight 明确报错。
 
 scale_dev_test() 只在全 dev score 上拟合 sklearn MinMaxScaler，transform 两个 split，
-不使用 HI 标签拟合、不 clip、不 EWMA。evaluate_all() 在排序后的表上计算六指标。
+不使用 HI 标签拟合、不 clip、不 EWMA。evaluate_all() 在排序后的表上计算七项指标。
 MAE/MAPE 按 cycle 聚合；structural/MI 按原公式跨 unit 聚合，MI random_state=42。
 常量输出、短序列、非正 FC 分母和缺少 HI 标签保持明确诊断，非有限指标转成 JSON null。
 

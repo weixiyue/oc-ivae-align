@@ -1,4 +1,4 @@
-"""UnsupervisedHI six-metric protocol (no postprocessing inside metrics)."""
+"""Public HI metrics, including UnsupervisedHI metrics and cycle-weighted RMSE."""
 from __future__ import annotations
 
 import warnings
@@ -49,6 +49,18 @@ def mae(hi_pred: np.ndarray, hi_gt: np.ndarray) -> float:
         Mean absolute cycle error.
     """
     return float(np.mean(np.abs(np.asarray(hi_pred) - np.asarray(hi_gt))))
+
+
+def rmse(hi_pred: np.ndarray, hi_gt: np.ndarray) -> float:
+    """Return equal-cycle root mean squared error against reference HI.
+
+    Args:
+        hi_pred: Predicted HI for each cycle.
+        hi_gt: Corresponding reference HI.
+    Returns:
+        Root mean squared cycle error.
+    """
+    return float(np.sqrt(np.mean((np.asarray(hi_pred) - np.asarray(hi_gt)) ** 2)))
 
 
 def mape(hi_pred: np.ndarray, hi_gt: np.ndarray) -> tuple[float, int]:
@@ -104,10 +116,12 @@ def evaluate_all(frame: pd.DataFrame, random_state: int = 42) -> dict[str, Any]:
             issues['mi'] = str(exc)
         map_value, n_valid = mape(hi, gt) if has_gt else (float('nan'), 0)
         if not has_gt:
-            issues.update(mae='reference HI unavailable', mape='reference HI unavailable')
+            issues.update(mae='reference HI unavailable', rmse='reference HI unavailable',
+                          mape='reference HI unavailable')
         elif not n_valid:
             issues['mape'] = 'no nonzero reference HI'
         values = dict(mae=mae(hi, gt) if has_gt else float('nan'), mape=map_value,
+                      rmse=rmse(hi, gt) if has_gt else float('nan'),
                       monotonicity=mono, trendability=trend, mi=mi)
         for name, value in values.items():
             if not np.isfinite(value):
@@ -133,15 +147,17 @@ def evaluate_all(frame: pd.DataFrame, random_state: int = 42) -> dict[str, Any]:
         return float(np.mean(values))
     map_value, n_valid = mape(frame.hi.to_numpy(), frame.hi_gt.to_numpy()) if has_gt else (float('nan'), 0)
     if not has_gt:
-        issues.update(mae='reference HI unavailable', mape='reference HI unavailable')
+        issues.update(mae='reference HI unavailable', rmse='reference HI unavailable',
+                      mape='reference HI unavailable')
     elif not n_valid:
         issues['mape'] = 'no nonzero reference HI'
     result = dict(mae=mae(frame.hi.to_numpy(), frame.hi_gt.to_numpy()) if has_gt else float('nan'),
+                  rmse=rmse(frame.hi.to_numpy(), frame.hi_gt.to_numpy()) if has_gt else float('nan'),
                   mape=map_value, monotonicity=unit_mean('monotonicity'),
                   trendability=abs(unit_mean('trendability')), fc=fc, mi=unit_mean('mi'),
                   n_cycles=len(frame), n_units=len(per_unit), mape_valid_count=n_valid,
                   fc_denominator=denominator, fc_end_std=end_std, per_unit=per_unit, issues=issues)
-    for name in ['mae', 'mape', 'monotonicity', 'trendability', 'fc', 'mi']:
+    for name in ['mae', 'rmse', 'mape', 'monotonicity', 'trendability', 'fc', 'mi']:
         if not np.isfinite(result[name]):
             issues.setdefault(name, 'reference metric formula is nonfinite')
     return _finite_json(result)

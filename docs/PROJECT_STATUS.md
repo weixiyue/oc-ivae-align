@@ -7,7 +7,7 @@
 
 - 原三模型的计算与 checkpoint keys 保持；新增 ocald.py/proposal_cnn.py/residual.py 独立实现。
 - train.py 使用普通函数，CLI 与配对实验共用训练循环；没有 Trainer 继承层。
-- evaluate.py 直接处理 cycle 分数表，独立 metrics.py 保留六项指标公式。
+- evaluate.py 直接处理 cycle 分数表，独立 metrics.py 提供七项指标公式（原六项加 RMSE）。
 - dataset.py 合并数据加载/取样，utils/preprocess.py 保留 N-CMAPSS 处理。
 - 原十份 YAML 内容不变；config/ 新增 OCALD/Proposal-C 四份及 Residual 四份完整独立配置（含两份短窗口），实验入口位于 experiments/。
 - 新运行使用独立 runs 目录，记录配置、best.pt、history、scores 和评估出处。
