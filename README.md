@@ -362,7 +362,8 @@ python -m experiments.run_knowledge_ablation_linear_prob \
 正式运行去掉 `--dry-run`；输出目录必须不存在。dry-run 只核对 checkpoint 元数据、已有缓存设备键、
 参考 HI 键和值，不运行推理、不创建结果或缓存。
 各组仍提取完整 mu_d，并仅在各自训练设备上拟合两类探测器；每组五类探测产物保存到独立 `probes/` 子目录。
-根目录单独生成 **`knowledge_ablation_linear_prob.md`**，行名为 `KGLD (full)`、
+根目录单独生成 **`knowledge_ablation_linear_prob.md`** 和 **`knowledge_ablation_linear_prob.csv`**，
+两者共用汇总行；CSV 保留完整数值精度，未知 seed 和缺失指标留空。行名为 `KGLD (full)`、
 `w/o conditional prior`、`w/o FiLM`、`w/o conditional prior and FiLM`。
 报告含运行来源、实际 seed、特征维数、两类探测的 test R²/MAE/RMSE、checkpoint SHA256、
 fit/val/test 设备，以及参考 HI 的路径/键值摘要和行序推定限制。

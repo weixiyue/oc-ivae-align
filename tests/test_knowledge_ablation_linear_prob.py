@@ -1,6 +1,7 @@
 """Dedicated knowledge probe report checks on untrained synthetic checkpoints."""
 import contextlib
 import copy
+import csv
 import io
 import json
 from pathlib import Path
@@ -135,9 +136,48 @@ class KnowledgeLinearProb(unittest.TestCase):
                 self.assertIn(label, report)
             self.assertIn('Seed', report)
             self.assertIn('all device partitions and reference HI agree', report)
-            self.assertEqual([p.name for p in output.iterdir() if p.is_file()], [knowledge.REPORT_NAME])
+            self.assertEqual({p.name for p in output.iterdir() if p.is_file()},
+                             {knowledge.REPORT_NAME, knowledge.CSV_NAME})
+            with (output / knowledge.CSV_NAME).open(encoding='utf-8', newline='') as file:
+                rows = list(csv.DictReader(file))
+            self.assertEqual(len(rows), 4)
+            for row, record in zip(rows, summary['runs']):
+                self.assertEqual(row['Method'], record['method'])
+                self.assertEqual(row['Run'], record['source_run'])
+                self.assertEqual(row['Seed'], str(record['actual_seed']))
+                self.assertEqual(int(row['Feature dim']), record['feature_dim'])
+                for prefix, name in [('Representation', 'representation'), ('HI-probe', 'hi')]:
+                    for label, key in [('R²↑', 'r2'), ('MAE↓', 'mae'), ('RMSE↓', 'rmse')]:
+                        self.assertEqual(float(row[f'{prefix} {label}']), record['test_metrics'][name][key])
             for path, contents in originals.items():
                 self.assertEqual(path.read_bytes(), contents)
+
+    def test_report_csv_precision_missing_values_and_empty_results(self):
+        metrics = dict(representation=dict(r2=None, mae=.12345678901234567, rmse=.23456789012345678),
+                       hi=dict(r2=-.34567890123456789, mae=0., rmse=None))
+        record = dict(status='success', method='KGLD (full)', source_run='path/with,comma',
+                      actual_seed=None, feature_dim=2, test_metrics=metrics)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            for records in ([record, dict(status='failed', source_run='failed/run', reason='fixture')], []):
+                with self.subTest(records=len(records)):
+                    knowledge.write_report(output, dict(runs=records, protocol_reference_run=None, counts={}))
+                    with (output / knowledge.CSV_NAME).open(encoding='utf-8', newline='') as file:
+                        reader = csv.DictReader(file)
+                        rows = list(reader)
+                        self.assertEqual(reader.fieldnames, ['Method', 'Run', 'Seed', 'Feature dim',
+                            'Representation R²↑', 'Representation MAE↓', 'Representation RMSE↓',
+                            'HI-probe R²↑', 'HI-probe MAE↓', 'HI-probe RMSE↓'])
+                    self.assertEqual(len(rows), bool(records))
+                    if records:
+                        row = rows[0]
+                        self.assertEqual(row['Run'], 'path/with,comma')
+                        self.assertEqual(row['Seed'], '')
+                        self.assertEqual(row['Representation R²↑'], '')
+                        self.assertEqual(row['HI-probe RMSE↓'], '')
+                        self.assertEqual(float(row['Representation MAE↓']), metrics['representation']['mae'])
+                        self.assertEqual(row['HI-probe MAE↓'], '0.0')
+                        self.assertIn('0.123457', (output / knowledge.REPORT_NAME).read_text())
 
     def test_corrupt_structure_fails_strictly_and_continues(self):
         with tempfile.TemporaryDirectory() as directory:

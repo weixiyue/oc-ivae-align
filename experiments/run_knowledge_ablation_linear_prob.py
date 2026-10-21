@@ -1,7 +1,8 @@
-"""Frozen KGLD knowledge-ablation probes with a separate, dedicated Markdown report."""
+"""Frozen KGLD knowledge-ablation probes with dedicated CSV and Markdown reports."""
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ LABELS = {
     'no_prior_no_film': 'w/o conditional prior and FiLM',
 }
 REPORT_NAME = 'knowledge_ablation_linear_prob.md'
+CSV_NAME = 'knowledge_ablation_linear_prob.csv'
 
 
 def reference_manifest(context: dict) -> dict:
@@ -68,20 +70,26 @@ def write_report(output: Path, summary: dict) -> None:
     columns = ['Method', 'Run', 'Seed', 'Feature dim',
                'Representation R²↑', 'Representation MAE↓', 'Representation RMSE↓',
                'HI-probe R²↑', 'HI-probe MAE↓', 'HI-probe RMSE↓']
+    rows = []
+    for record in summary['runs']:
+        if record['status'] != 'success':
+            continue
+        row = [record['method'], record['source_run'], record['actual_seed'], record['feature_dim']]
+        row.extend(record['test_metrics'][name][key] for name in ('representation', 'hi')
+                   for key in ('r2', 'mae', 'rmse'))
+        rows.append(row)
+    with (output / CSV_NAME).open('w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow(columns)
+        writer.writerows(rows)
     lines = ['# KGLD knowledge-ablation linear probes', '',
              'Frozen complete mu_d and public scalar HI; independent StandardScaler → LinearRegression probes. '
              'Probe fitting uses the original training units only; test metrics pool cycles equally. '
              'No network training, prediction rescaling, clipping or smoothing.', '',
              '| ' + ' | '.join(columns) + ' |', '| ' + ' | '.join(['---'] * 2 + ['---:'] * 8) + ' |']
-    for record in summary['runs']:
-        if record['status'] != 'success':
-            continue
-        metrics = record['test_metrics']
-        cells = [record['method'], record['source_run'],
-                 '—' if record['actual_seed'] is None else str(record['actual_seed']), str(record['feature_dim'])]
-        for name in ('representation', 'hi'):
-            cells.extend('—' if metrics[name][key] is None else f'{metrics[name][key]:.6f}'
-                         for key in ('r2', 'mae', 'rmse'))
+    for row in rows:
+        cells = ['—' if value is None else str(value) if index < 4 else f'{value:.6f}'
+                 for index, value in enumerate(row)]
         lines.append('| ' + ' | '.join(cell.replace('|', '\\|').replace('\n', '<br>') for cell in cells) + ' |')
     lines.extend(['', '## Protocol checks and provenance', '',
                   f"Comparison reference: `{summary['protocol_reference_run']}`. "
