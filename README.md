@@ -345,6 +345,35 @@ dry-run 只读取配置、checkpoint 及已有预处理缓存的设备键，不�
 PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p test_linear_probe_comparison.py -v
 ```
 
+## Knowledge ablation 独立线性探测
+
+独立文件名为 `experiments/run_knowledge_ablation_linear_prob.py`（按此拼写），
+仅比较完整 KGLD 和三个知识机制消融，复用已有严格加载及单次线性探测流程，不训练网络。
+
+```bash
+python -m experiments.run_knowledge_ablation_linear_prob \
+  --run-dirs runs/kgld \
+    runs/knowledge_ablation/no_prior \
+    runs/knowledge_ablation/no_film \
+    runs/knowledge_ablation/no_prior_no_film \
+  --output-dir runs/knowledge_ablation_linear_prob --device cuda --dry-run
+```
+
+正式运行去掉 `--dry-run`；输出目录必须不存在。dry-run 只核对 checkpoint 元数据、已有缓存设备键、
+参考 HI 键和值，不运行推理、不创建结果或缓存。
+各组仍提取完整 mu_d，并仅在各自训练设备上拟合两类探测器；每组五类探测产物保存到独立 `probes/` 子目录。
+根目录单独生成 **`knowledge_ablation_linear_prob.md`**，行名为 `KGLD (full)`、
+`w/o conditional prior`、`w/o FiLM`、`w/o conditional prior and FiLM`。
+报告含运行来源、实际 seed、特征维数、两类探测的 test R²/MAE/RMSE、checkpoint SHA256、
+fit/val/test 设备，以及参考 HI 的路径/键值摘要和行序推定限制。
+设备划分或参考 HI 不同会明确标记，不强制改为相同划分，不合并配置或种子。
+实际 seed 未记录时保持未知，不将配置 seed 当作已验证的实际 seed。
+本入口不会改写原批量探测脚本及其报告。
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p test_knowledge_ablation_linear_prob.py -v
+```
+
 ## KGLD 知识机制消融
 
 独立入口只读取启动时的 `config/kgld.yaml`，依次运行 `no_prior`、`no_film`、
